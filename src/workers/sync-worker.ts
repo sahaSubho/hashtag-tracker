@@ -14,6 +14,7 @@ interface SyncJobPayload {
   parentRunId?: string;
   cursor?: string | null;
   temporaryAttempt?: number;
+  truncationChainLength?: number;
 }
 
 /**
@@ -46,6 +47,7 @@ export class SyncWorker {
           parentRunId: payload.parentRunId,
           cursor: payload.cursor,
           temporaryAttempt: payload.temporaryAttempt,
+          truncationChainLength: payload.truncationChainLength,
         }
       );
       await this.deps.queue.ack(job);

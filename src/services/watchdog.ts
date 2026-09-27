@@ -16,6 +16,9 @@ const FAST_BURN_THRESHOLD = 14.4;
 const SLOW_WINDOW_MS = 6 * 60 * 60 * 1000;
 const SLOW_BURN_THRESHOLD = 6;
 
+/** spec §6.2: a gap this old exceeds Meta's ~24h recent_media lookback and can never be closed. */
+const UNRECOVERABLE_GAP_MS = 24 * 60 * 60 * 1000;
+
 export interface WatchdogDeps {
   db: Kysely<DB>;
   clock: Clock;
@@ -50,7 +53,36 @@ export async function runWatchdogOnce(deps: WatchdogDeps): Promise<void> {
   await checkOutboxStalled(deps);
   await checkFreshnessBurnRate(deps, row.id, "fast", FAST_WINDOW_MS, FAST_BURN_THRESHOLD, "critical");
   await checkFreshnessBurnRate(deps, row.id, "slow", SLOW_WINDOW_MS, SLOW_BURN_THRESHOLD, "warning");
-  void clock;
+  await checkUnrecoverableGaps(deps, row.id);
+}
+
+/**
+ * A TRUNCATED run's gap can only ever close via a follow-up sync resuming
+ * from its saved cursor (spec §6.2). But recent_media only covers roughly
+ * the last 24h, so once a gap is older than that, no follow-up can ever
+ * close it — the data is gone. This marks that run's gap unrecoverable
+ * (once, permanently) and raises a critical alert per affected run, since
+ * each is its own permanent data-loss event, not one ongoing condition to
+ * dedupe against.
+ */
+async function checkUnrecoverableGaps(deps: WatchdogDeps, hashtagId: number): Promise<void> {
+  const { db, clock, alerts } = deps;
+  const cutoff = new Date(clock.now().getTime() - UNRECOVERABLE_GAP_MS);
+
+  const openGaps = await db
+    .selectFrom("sync_runs")
+    .selectAll()
+    .where("hashtag_id", "=", hashtagId)
+    .where("gap_status", "=", "open")
+    .where("oldest_seen_ts", "<", cutoff)
+    .execute();
+
+  for (const run of openGaps) {
+    await db.updateTable("sync_runs").set({ gap_status: "unrecoverable" }).where("id", "=", run.id).execute();
+    const key = `sync_gap_unrecoverable:${run.id}`;
+    await alertRepo.upsertFiring(db, key, clock.now(), { runId: run.id, edge: run.edge });
+    await alerts.fire("sync_gap_unrecoverable", "critical", { runId: run.id, edge: run.edge });
+  }
 }
 
 async function checkSyncOverdue(deps: WatchdogDeps, hashtagId: number, edge: SyncEdge): Promise<void> {

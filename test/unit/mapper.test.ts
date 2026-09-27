@@ -102,4 +102,15 @@ describe("mapMetaItem", () => {
     });
     expect("rejected" in r && r.rejected.excerpt).not.toContain("SECRET123");
   });
+
+  it("accepts a null caption the same as a missing one, instead of rejecting or crashing", () => {
+    const r = mapMetaItem({ ...img, caption: null });
+    expect("ok" in r && r.ok.caption).toBeNull();
+  });
+
+  it("accepts null like_count and comments_count the same as missing", () => {
+    const r = mapMetaItem({ ...img, like_count: null, comments_count: null });
+    expect("ok" in r && r.ok.likeCount).toBeNull();
+    expect("ok" in r && r.ok.commentsCount).toBeNull();
+  });
 });

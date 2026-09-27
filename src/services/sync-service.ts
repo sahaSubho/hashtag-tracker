@@ -18,6 +18,15 @@ const DEFAULT_MAX_TEMPORARY_RETRIES = 5;
 const BACKOFF_BASE_MS = 30000;
 const BACKOFF_MAX_MS = 15 * 60 * 1000;
 
+/**
+ * spec §7-A adaptive interval: after this many consecutive truncations for
+ * one edge, a busy hashtag is clearly outrunning the normal cron cadence.
+ * Rather than wait for the next scheduled cron tick, the follow-up after
+ * the 2nd (and every subsequent) consecutive truncation is enqueued sooner.
+ */
+const ADAPTIVE_TRUNCATION_THRESHOLD = 2;
+const ADAPTIVE_FOLLOWUP_DELAY_MS = 30 * 60 * 1000; // half the default 3h interval, per the plan
+
 export interface SyncServiceDeps {
   db: Kysely<DB>;
   meta: MetaClient;
@@ -35,6 +44,8 @@ export interface SyncJobInput {
   cursor?: string | null;
   /** How many temporary-error retries have already happened for this logical sync chain. */
   temporaryAttempt?: number;
+  /** How many consecutive TRUNCATED runs (including this one) precede this job (spec §7-A adaptive interval). */
+  truncationChainLength?: number;
 }
 
 export interface SyncResult {
@@ -210,6 +221,10 @@ export async function runSync(deps: SyncServiceDeps, job: SyncJobInput): Promise
     });
 
     if (finalStatus === "TRUNCATED") {
+      const chainLength = (job.truncationChainLength ?? 0) + 1;
+      const delayMs =
+        chainLength >= ADAPTIVE_TRUNCATION_THRESHOLD ? ADAPTIVE_FOLLOWUP_DELAY_MS : 0;
+
       await outboxRepo.enqueue(
         tx,
         "SYNC_HASHTAG_MEDIA",
@@ -218,8 +233,9 @@ export async function runSync(deps: SyncServiceDeps, job: SyncJobInput): Promise
           edge: job.edge,
           parentRunId: run.id,
           cursor: resumeCursor,
+          truncationChainLength: chainLength,
         },
-        clock.now()
+        new Date(clock.now().getTime() + delayMs)
       );
       metrics.inc("sync.truncated", { edge: job.edge });
     } else if (job.parentRunId) {

@@ -18,9 +18,12 @@ const rawItemSchema = z.object({
   permalink: z.string().min(1),
   timestamp: z.string().min(1),
   media_url: z.string().optional(),
-  caption: z.string().optional(),
-  like_count: z.number().optional(),
-  comments_count: z.number().optional(),
+  // .nullable() alongside .optional(): Meta's API is not guaranteed to
+  // omit these fields when they have no value — a null is treated the
+  // same as absent, rather than rejecting the whole item.
+  caption: z.string().optional().nullable(),
+  like_count: z.number().optional().nullable(),
+  comments_count: z.number().optional().nullable(),
   children: z.object({ data: z.array(childSchema) }).optional(),
 });
 
@@ -93,7 +96,7 @@ export function mapMetaItem(raw: unknown): MapResult {
   const item = parsed.data;
 
   const caption =
-    item.caption !== undefined
+    item.caption !== undefined && item.caption !== null
       ? stripControlChars(item.caption).slice(0, MAX_CAPTION_LENGTH)
       : null;
 
