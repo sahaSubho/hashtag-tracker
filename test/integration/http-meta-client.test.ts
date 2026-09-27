@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { HttpMetaClient } from "../../src/adapters/meta/http-meta-client.js";
 import { metaClientContract } from "../contract/meta-client.contract.js";
 import type { HttpDownloader } from "../../src/ports/http-downloader.js";
+import { FakeClock } from "../helpers/fakes.js";
 
 // A body's async-generator can only be iterated once, but tests may call
 // the client multiple times against the same scripted URL (e.g. to observe
@@ -222,6 +223,7 @@ describe("HttpMetaClient", () => {
     );
     const http = new ScriptedHttpClient(responses);
     const sleeps: number[] = [];
+    const clock = new FakeClock(new Date("2026-01-01T00:00:00Z"));
     const client = new HttpMetaClient({
       http,
       accessToken: "test-token",
@@ -229,8 +231,10 @@ describe("HttpMetaClient", () => {
       igUserId: "123",
       apiVersion: "v24.0",
       fields: FIELDS,
+      clock,
       sleep: (ms) => {
         sleeps.push(ms);
+        clock.advance(ms);
       },
     });
 

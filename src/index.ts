@@ -18,6 +18,7 @@ import { runRelayOnce } from "./services/relay.js";
 import { runSweeperOnce } from "./services/sweeper.js";
 import { SyncWorker } from "./workers/sync-worker.js";
 import { DownloadWorker } from "./workers/download-worker.js";
+import { InMemoryRateLimitStore } from "./adapters/rate-limit/in-memory-rate-limit-store.js";
 
 const META_FIELDS =
   "id,media_type,timestamp,permalink,media_url,caption,like_count,comments_count,children{media_type,media_url}";
@@ -163,6 +164,13 @@ async function main(): Promise<void> {
       cursorKeys: config.cursorSigningKeys,
       hashtag: config.hashtag,
       storageDir: config.storageDir,
+      trustProxy: config.trustProxy,
+      rateLimit: {
+        store: new InMemoryRateLimitStore(clock),
+        limit: config.restRatePerMin,
+        windowMs: 60000,
+        burst: config.restBurst,
+      },
     });
     httpServer = app.listen(config.port, () => {
       logger.info({ port: config.port }, "api listening");

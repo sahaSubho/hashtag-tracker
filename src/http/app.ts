@@ -7,6 +7,7 @@ import type { CursorSigningKey } from "../domain/cursor.js";
 import { hashtagsRouter } from "./routes/hashtags.js";
 import { filesRouter } from "./routes/files.js";
 import { healthRouter } from "./routes/health.js";
+import { rateLimitMiddleware, type RateLimitConfig } from "./rate-limit-middleware.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -23,10 +24,15 @@ export interface AppDeps {
   cursorKeys: CursorSigningKey[];
   hashtag: string;
   storageDir?: string;
+  /** Omitted disables rate limiting (e.g. in most tests). */
+  rateLimit?: RateLimitConfig;
+  /** Express `trust proxy` setting — number of proxy hops to trust. Default 0 (spec §13.3). */
+  trustProxy?: number;
 }
 
 export function createApp(deps: AppDeps): Express {
   const app = express();
+  app.set("trust proxy", deps.trustProxy ?? 0);
 
   app.use((req, res, next) => {
     req.id = randomUUID();
@@ -36,6 +42,11 @@ export function createApp(deps: AppDeps): Express {
   });
 
   app.use(healthRouter());
+
+  if (deps.rateLimit) {
+    app.use(rateLimitMiddleware(deps.rateLimit));
+  }
+
   app.use(
     hashtagsRouter({
       db: deps.db,
