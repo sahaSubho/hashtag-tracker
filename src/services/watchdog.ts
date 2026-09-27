@@ -5,6 +5,16 @@ import type { AlertSink } from "../ports/alert-sink.js";
 import { alertRepo } from "../db/repositories/alert-repo.js";
 import { hashtagRepo } from "../db/repositories/hashtag-repo.js";
 import { syncRunRepo } from "../db/repositories/sync-run-repo.js";
+import { computeBurnRate } from "../domain/slo.js";
+
+const SLO_PERIOD_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const FRESHNESS_SLO_TARGET = 0.99;
+
+/** spec §14: page at 14.4x burn over a 1h window, ticket at 6x over a 6h window. */
+const FAST_WINDOW_MS = 60 * 60 * 1000;
+const FAST_BURN_THRESHOLD = 14.4;
+const SLOW_WINDOW_MS = 6 * 60 * 60 * 1000;
+const SLOW_BURN_THRESHOLD = 6;
 
 export interface WatchdogDeps {
   db: Kysely<DB>;
@@ -38,6 +48,8 @@ export async function runWatchdogOnce(deps: WatchdogDeps): Promise<void> {
   }
 
   await checkOutboxStalled(deps);
+  await checkFreshnessBurnRate(deps, row.id, "fast", FAST_WINDOW_MS, FAST_BURN_THRESHOLD, "critical");
+  await checkFreshnessBurnRate(deps, row.id, "slow", SLOW_WINDOW_MS, SLOW_BURN_THRESHOLD, "warning");
   void clock;
 }
 
@@ -62,6 +74,52 @@ async function checkSyncOverdue(deps: WatchdogDeps, hashtagId: number, edge: Syn
   const isOverdue = referenceTime === null ? false : clock.now().getTime() - referenceTime.getTime() > thresholdMs;
 
   await transition(deps, key, isOverdue, "critical", { edge, hashtagId });
+}
+
+/**
+ * SLO burn-rate alerting (spec §14): rather than paging on a single failed
+ * sync, this looks at the recent failure ratio and asks "at this rate, how
+ * fast is the 30-day error budget being spent?" A single isolated miss
+ * burns the budget too slowly to trip either threshold; a sustained run of
+ * failures does.
+ */
+async function checkFreshnessBurnRate(
+  deps: WatchdogDeps,
+  hashtagId: number,
+  label: "fast" | "slow",
+  windowMs: number,
+  threshold: number,
+  severity: "warning" | "critical"
+): Promise<void> {
+  const { db, clock } = deps;
+  const key = `freshness_burn_rate_${label}`;
+  const windowStart = new Date(clock.now().getTime() - windowMs);
+
+  const runs = await db
+    .selectFrom("sync_runs")
+    .select(["status", "gap_status"])
+    .where("hashtag_id", "=", hashtagId)
+    .where("started_at", ">=", windowStart)
+    .where("status", "!=", "RUNNING")
+    .execute();
+
+  if (runs.length === 0) {
+    await transition(deps, key, false, severity, {});
+    return;
+  }
+
+  const badCount = runs.filter(
+    (r) => !(r.status === "SUCCESS" || (r.status === "TRUNCATED" && r.gap_status === "closed"))
+  ).length;
+  const errorRatioInWindow = badCount / runs.length;
+
+  const burnRate = computeBurnRate({
+    errorRatioInWindow,
+    sloTarget: FRESHNESS_SLO_TARGET,
+    windowFractionOfSloPeriod: windowMs / SLO_PERIOD_MS,
+  });
+
+  await transition(deps, key, burnRate >= threshold, severity, { burnRate, badCount, total: runs.length });
 }
 
 async function checkOutboxStalled(deps: WatchdogDeps): Promise<void> {

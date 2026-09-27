@@ -73,7 +73,7 @@ export function createApp(deps: AppDeps): Express {
     app.use(filesRouter({ storageDir: deps.storageDir }));
   }
   if (deps.adminToken) {
-    app.use(internalStatusRouter({ db: deps.db, adminToken: deps.adminToken }));
+    app.use(internalStatusRouter({ db: deps.db, storage: deps.storage, adminToken: deps.adminToken }));
   }
 
   app.use((_req, res) => {

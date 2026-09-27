@@ -18,6 +18,7 @@ import { bootstrap } from "./services/bootstrap.js";
 import { runRelayOnce } from "./services/relay.js";
 import { runSweeperOnce } from "./services/sweeper.js";
 import { runWatchdogOnce } from "./services/watchdog.js";
+import { runRetentionOnce } from "./services/retention.js";
 import { SyncWorker } from "./workers/sync-worker.js";
 import { DownloadWorker } from "./workers/download-worker.js";
 import { InMemoryRateLimitStore } from "./adapters/rate-limit/in-memory-rate-limit-store.js";
@@ -29,6 +30,7 @@ const META_FIELDS =
 const RELAY_INTERVAL_MS = 1000;
 const SWEEPER_INTERVAL_MS = 60000;
 const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
+const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const WORKER_POLL_INTERVAL_MS = 1000;
 const STALE_LEASE_GRACE_MS = 0;
 const STALE_PENDING_GRACE_MS = 5 * 60 * 1000;
@@ -128,6 +130,17 @@ async function main(): Promise<void> {
           outboxStallMs: OUTBOX_STALL_MS,
         }).catch((err) => logger.error({ err }, "watchdog tick failed"));
       }, WATCHDOG_INTERVAL_MS)
+    );
+
+    intervals.push(
+      setInterval(() => {
+        void runRetentionOnce({
+          db,
+          clock,
+          storage,
+          mediaRetentionDays: config.mediaRetentionDays,
+        }).catch((err) => logger.error({ err }, "retention tick failed"));
+      }, RETENTION_INTERVAL_MS)
     );
   }
 

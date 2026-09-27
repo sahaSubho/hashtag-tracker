@@ -118,6 +118,10 @@ export class FakeStorage implements BlobStorage {
     return `/files/${key}`;
   }
 
+  async delete(key: string): Promise<void> {
+    this.store.delete(key);
+  }
+
   getBytes(key: string): Uint8Array | undefined {
     return this.store.get(key);
   }

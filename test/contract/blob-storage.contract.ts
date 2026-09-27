@@ -36,5 +36,17 @@ export function blobStorageContract(makeStorage: () => BlobStorage): void {
       await storage.put("k2", bytes([1, 2]), "image/jpeg");
       expect(await storage.exists("k2")).toBe(true);
     });
+
+    it("delete removes an existing key", async () => {
+      const storage = makeStorage();
+      await storage.put("k3", bytes([1]), "image/jpeg");
+      await storage.delete("k3");
+      expect(await storage.exists("k3")).toBe(false);
+    });
+
+    it("delete on an unknown key is a no-op, not an error", async () => {
+      const storage = makeStorage();
+      await expect(storage.delete("never-existed")).resolves.not.toThrow();
+    });
   });
 }
