@@ -5,6 +5,7 @@ import type { Clock } from "../ports/clock.js";
 import type { Metrics } from "../ports/metrics.js";
 import { assetRepo } from "../db/repositories/asset-repo.js";
 import { outboxRepo } from "../db/repositories/outbox-repo.js";
+import { heartbeatRepo } from "../db/repositories/heartbeat-repo.js";
 
 export interface SweeperDeps {
   db: Kysely<DB>;
@@ -28,6 +29,8 @@ export interface SweeperDeps {
 export async function runSweeperOnce(deps: SweeperDeps): Promise<number> {
   const { db, clock, metrics, staleLeaseGraceMs, stalePendingGraceMs } = deps;
   let requeued = 0;
+
+  await heartbeatRepo.checkIn(db, "sweeper", clock.now());
 
   const leaseCutoff = new Date(clock.now().getTime() - staleLeaseGraceMs);
   const expiredLeases = await db

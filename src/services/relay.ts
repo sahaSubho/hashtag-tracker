@@ -4,6 +4,7 @@ import type { Queue } from "../ports/queue.js";
 import type { Clock } from "../ports/clock.js";
 import type { Metrics } from "../ports/metrics.js";
 import { outboxRepo } from "../db/repositories/outbox-repo.js";
+import { heartbeatRepo } from "../db/repositories/heartbeat-repo.js";
 
 export interface RelayDeps {
   db: Kysely<DB>;
@@ -22,6 +23,8 @@ export interface RelayDeps {
  */
 export async function runRelayOnce(deps: RelayDeps): Promise<number> {
   const { db, queue, clock, metrics, batchSize } = deps;
+
+  await heartbeatRepo.checkIn(db, "relay", clock.now());
 
   const rows = await db
     .transaction()

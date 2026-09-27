@@ -5,9 +5,12 @@ import type { DB } from "../db/schema.js";
 import type { BlobStorage } from "../ports/blob-storage.js";
 import type { CursorSigningKey } from "../domain/cursor.js";
 import type { Metrics } from "../ports/metrics.js";
+import type { Clock } from "../ports/clock.js";
+import { SystemClock } from "../adapters/clock/system-clock.js";
 import { hashtagsRouter } from "./routes/hashtags.js";
 import { filesRouter } from "./routes/files.js";
 import { healthRouter } from "./routes/health.js";
+import { internalStatusRouter } from "./routes/internal-status.js";
 import { rateLimitMiddleware, type RateLimitConfig } from "./rate-limit-middleware.js";
 
 declare global {
@@ -31,6 +34,10 @@ export interface AppDeps {
   trustProxy?: number;
   /** Omitted disables the http_request_duration_seconds observation (spec §12.2). */
   metrics?: Metrics;
+  /** Used by /readyz's staleness check. Defaults to the real system clock. */
+  clock?: Clock;
+  /** Omitted disables GET /internal/status entirely (404, not just unauthorized). */
+  adminToken?: string;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -48,7 +55,7 @@ export function createApp(deps: AppDeps): Express {
     app.use(requestDurationMiddleware(deps.metrics));
   }
 
-  app.use(healthRouter());
+  app.use(healthRouter({ db: deps.db, clock: deps.clock ?? new SystemClock() }));
 
   if (deps.rateLimit) {
     app.use(rateLimitMiddleware(deps.rateLimit));
@@ -64,6 +71,9 @@ export function createApp(deps: AppDeps): Express {
   );
   if (deps.storageDir) {
     app.use(filesRouter({ storageDir: deps.storageDir }));
+  }
+  if (deps.adminToken) {
+    app.use(internalStatusRouter({ db: deps.db, adminToken: deps.adminToken }));
   }
 
   app.use((_req, res) => {

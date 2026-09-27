@@ -17,18 +17,23 @@ import { NodeCronScheduler } from "./adapters/scheduler/node-cron-scheduler.js";
 import { bootstrap } from "./services/bootstrap.js";
 import { runRelayOnce } from "./services/relay.js";
 import { runSweeperOnce } from "./services/sweeper.js";
+import { runWatchdogOnce } from "./services/watchdog.js";
 import { SyncWorker } from "./workers/sync-worker.js";
 import { DownloadWorker } from "./workers/download-worker.js";
 import { InMemoryRateLimitStore } from "./adapters/rate-limit/in-memory-rate-limit-store.js";
+import { LogAlertSink } from "./adapters/alerts/log-alert-sink.js";
 
 const META_FIELDS =
   "id,media_type,timestamp,permalink,media_url,caption,like_count,comments_count,children{media_type,media_url}";
 
 const RELAY_INTERVAL_MS = 1000;
 const SWEEPER_INTERVAL_MS = 60000;
+const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
 const WORKER_POLL_INTERVAL_MS = 1000;
 const STALE_LEASE_GRACE_MS = 0;
 const STALE_PENDING_GRACE_MS = 5 * 60 * 1000;
+const SYNC_OVERDUE_GRACE_MS = 15 * 60 * 1000;
+const OUTBOX_STALL_MS = 10 * 60 * 1000;
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
@@ -106,6 +111,24 @@ async function main(): Promise<void> {
         }).catch((err) => logger.error({ err }, "sweeper tick failed"));
       }, SWEEPER_INTERVAL_MS)
     );
+
+    const alertSink = new LogAlertSink({
+      logger,
+      slackWebhookUrl: (await secrets.get("SLACK_WEBHOOK_URL")) || undefined,
+    });
+    intervals.push(
+      setInterval(() => {
+        void runWatchdogOnce({
+          db,
+          clock,
+          alerts: alertSink,
+          hashtag: config.hashtag,
+          syncIntervalMs: cronIntervalHintMs(config.syncIntervalCron),
+          syncOverdueGraceMs: SYNC_OVERDUE_GRACE_MS,
+          outboxStallMs: OUTBOX_STALL_MS,
+        }).catch((err) => logger.error({ err }, "watchdog tick failed"));
+      }, WATCHDOG_INTERVAL_MS)
+    );
   }
 
   if (config.appRoles.includes("scheduler")) {
@@ -178,6 +201,8 @@ async function main(): Promise<void> {
         burst: config.restBurst,
       },
       metrics,
+      clock,
+      adminToken: (await secrets.get("INTERNAL_STATUS_ADMIN_TOKEN")) || undefined,
     });
     httpServer = app.listen(config.port, () => {
       logger.info({ port: config.port }, "api listening");

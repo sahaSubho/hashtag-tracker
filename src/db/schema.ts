@@ -152,6 +152,11 @@ export interface ApiKeysTable {
   revoked_at: ColumnType<Date, Date | string | null, Date | string | null> | null;
 }
 
+export interface HeartbeatsTable {
+  component: string;
+  last_seen_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 export interface DB {
   hashtags: HashtagsTable;
   media: MediaTable;
@@ -165,4 +170,5 @@ export interface DB {
   dead_letters: DeadLettersTable;
   alerts: AlertsTable;
   api_keys: ApiKeysTable;
+  heartbeats: HeartbeatsTable;
 }
