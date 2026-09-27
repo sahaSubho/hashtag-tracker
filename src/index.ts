@@ -10,7 +10,8 @@ import { DiskStorage } from "./adapters/storage/disk-storage.js";
 import { EnvSecretProvider } from "./adapters/secrets/env-secret-provider.js";
 import { NodeFetchDownloader } from "./adapters/downloader/node-fetch-downloader.js";
 import { SystemDns } from "./adapters/dns/system-dns.js";
-import { NoopMetrics } from "./adapters/metrics/noop-metrics.js";
+import { PromMetrics } from "./adapters/metrics/prom-metrics.js";
+import { createMetricsServer } from "./http/metrics-server.js";
 import { HttpMetaClient } from "./adapters/meta/http-meta-client.js";
 import { NodeCronScheduler } from "./adapters/scheduler/node-cron-scheduler.js";
 import { bootstrap } from "./services/bootstrap.js";
@@ -45,7 +46,11 @@ async function main(): Promise<void> {
   await runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 
   const clock = new SystemClock();
-  const metrics = new NoopMetrics();
+  const metrics = new PromMetrics();
+  const metricsServer = createMetricsServer(metrics);
+  metricsServer.listen(config.metricsPort, () => {
+    logger.info({ port: config.metricsPort }, "metrics listening");
+  });
   const queue = new InMemoryQueue(clock);
   const storage = new DiskStorage(config.storageDir);
   const dns = new SystemDns();
@@ -58,6 +63,7 @@ async function main(): Promise<void> {
     apiVersion: config.metaApiVersion,
     fields: META_FIELDS,
     clock,
+    metrics,
     refreshAccessToken: async () => {
       const refreshed = await secrets.get("META_ACCESS_TOKEN");
       if (!refreshed) {
@@ -171,6 +177,7 @@ async function main(): Promise<void> {
         windowMs: 60000,
         burst: config.restBurst,
       },
+      metrics,
     });
     httpServer = app.listen(config.port, () => {
       logger.info({ port: config.port }, "api listening");
@@ -189,6 +196,7 @@ async function main(): Promise<void> {
       if (httpServer) httpServer.close(() => resolve());
       else resolve();
     });
+    await new Promise<void>((resolve) => metricsServer.close(() => resolve()));
 
     await db.destroy();
     process.exit(0);

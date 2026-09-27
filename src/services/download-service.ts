@@ -101,7 +101,7 @@ export async function runDownload(deps: DownloadServiceDeps, job: DownloadJobInp
       });
 
       if (claimed.position === 0) {
-        await linkReposts(tx, claimed.media_id, hash);
+        await linkReposts(tx, claimed.media_id, hash, deps.metrics);
       }
     });
 

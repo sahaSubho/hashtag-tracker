@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { MetaClient, MetaPage, MetaTokenHealth } from "../../ports/meta-client.js";
 import type { HttpDownloader } from "../../ports/http-downloader.js";
+import type { Metrics } from "../../ports/metrics.js";
 import { sanitizeUrl } from "../../http/logger.js";
 import { MetaThrottle } from "./meta-throttle.js";
 import { SystemClock } from "../clock/system-clock.js";
@@ -15,6 +16,8 @@ export interface HttpMetaClientOptions {
   fields: string;
   clock?: Clock;
   sleep?: (ms: number) => Promise<void> | void;
+  /** Records meta.calls_total{endpoint,code} (spec §12.2). Optional so tests need not supply one. */
+  metrics?: Metrics;
   /**
    * Called at most once per request when a 190 (invalid token) error is
    * received — the token may have just been rotated in Secrets Manager.
@@ -142,6 +145,8 @@ export class HttpMetaClient implements MetaClient {
     const url = this.buildUrl(path, params);
     await this.throttle.waitTurn();
 
+    const endpoint = path.split("/").pop() ?? path;
+
     try {
       const result = await this.opts.http.get(url);
       this.throttle.recordUsage(result.headers);
@@ -153,6 +158,7 @@ export class HttpMetaClient implements MetaClient {
 
       if (isMetaErrorBody(json)) {
         const apiError = new MetaApiError(json.error.code, json.error.message ?? "Meta API error");
+        this.opts.metrics?.inc("meta.calls_total", { endpoint, code: String(apiError.code) });
 
         if (
           apiError.code === INVALID_TOKEN_CODE &&
@@ -168,6 +174,7 @@ export class HttpMetaClient implements MetaClient {
         throw apiError;
       }
 
+      this.opts.metrics?.inc("meta.calls_total", { endpoint, code: String(result.status) });
       return json as T;
     } catch (err) {
       if (err instanceof MetaApiError) throw err;

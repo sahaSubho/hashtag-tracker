@@ -4,6 +4,7 @@ import type { Kysely } from "kysely";
 import type { DB } from "../db/schema.js";
 import type { BlobStorage } from "../ports/blob-storage.js";
 import type { CursorSigningKey } from "../domain/cursor.js";
+import type { Metrics } from "../ports/metrics.js";
 import { hashtagsRouter } from "./routes/hashtags.js";
 import { filesRouter } from "./routes/files.js";
 import { healthRouter } from "./routes/health.js";
@@ -28,6 +29,8 @@ export interface AppDeps {
   rateLimit?: RateLimitConfig;
   /** Express `trust proxy` setting — number of proxy hops to trust. Default 0 (spec §13.3). */
   trustProxy?: number;
+  /** Omitted disables the http_request_duration_seconds observation (spec §12.2). */
+  metrics?: Metrics;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -40,6 +43,10 @@ export function createApp(deps: AppDeps): Express {
     res.set("X-Content-Type-Options", "nosniff");
     next();
   });
+
+  if (deps.metrics) {
+    app.use(requestDurationMiddleware(deps.metrics));
+  }
 
   app.use(healthRouter());
 
@@ -64,4 +71,21 @@ export function createApp(deps: AppDeps): Express {
   });
 
   return app;
+}
+
+function requestDurationMiddleware(metrics: Metrics) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const start = process.hrtime.bigint();
+    res.on("finish", () => {
+      const seconds = Number(process.hrtime.bigint() - start) / 1e9;
+      // req.route is only set once Express has matched a route; fall back
+      // to the raw path for 404s and other unmatched requests.
+      const route = req.route?.path ?? req.path;
+      metrics.observe("http_request_duration_seconds", seconds, {
+        route: String(route),
+        status: String(res.statusCode),
+      });
+    });
+    next();
+  };
 }

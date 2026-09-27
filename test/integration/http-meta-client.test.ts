@@ -316,4 +316,57 @@ describe("HttpMetaClient", () => {
       expect(err.category).toBe("temporary");
     }
   });
+
+  it("records meta.calls_total per endpoint and response code", async () => {
+    const responses = new Map<string, ReturnType<typeof jsonResponse>>();
+    responses.set("https://graph.facebook.com/v24.0/17843/recent_media", jsonResponse({ data: [] }));
+    const http = new ScriptedHttpClient(responses);
+    const calls: Array<{ name: string; labels?: Record<string, string> }> = [];
+    const client = new HttpMetaClient({
+      http,
+      accessToken: "test-token",
+      appSecret: undefined,
+      igUserId: "123",
+      apiVersion: "v24.0",
+      fields: FIELDS,
+      metrics: {
+        inc: (name, labels) => calls.push({ name, labels }),
+        gauge: () => {},
+        observe: () => {},
+      },
+    });
+
+    await client.media("recent", "17843", null);
+
+    const call = calls.find((c) => c.name === "meta.calls_total");
+    expect(call?.labels).toMatchObject({ endpoint: "recent_media", code: "200" });
+  });
+
+  it("records meta.calls_total with the error code on a Meta API error", async () => {
+    const responses = new Map<string, ReturnType<typeof jsonResponse>>();
+    responses.set(
+      "https://graph.facebook.com/v24.0/17843/recent_media",
+      jsonResponse({ error: { code: 4, message: "rate limited" } })
+    );
+    const http = new ScriptedHttpClient(responses);
+    const calls: Array<{ name: string; labels?: Record<string, string> }> = [];
+    const client = new HttpMetaClient({
+      http,
+      accessToken: "test-token",
+      appSecret: undefined,
+      igUserId: "123",
+      apiVersion: "v24.0",
+      fields: FIELDS,
+      metrics: {
+        inc: (name, labels) => calls.push({ name, labels }),
+        gauge: () => {},
+        observe: () => {},
+      },
+    });
+
+    await client.media("recent", "17843", null).catch(() => {});
+
+    const call = calls.find((c) => c.name === "meta.calls_total");
+    expect(call?.labels).toMatchObject({ endpoint: "recent_media", code: "4" });
+  });
 });

@@ -1,5 +1,6 @@
 import type { Transaction } from "kysely";
 import type { DB } from "../db/schema.js";
+import type { Metrics } from "../ports/metrics.js";
 
 /**
  * Links a newly-stored primary asset's post to any existing repost group,
@@ -12,7 +13,8 @@ import type { DB } from "../db/schema.js";
 export async function linkReposts(
   tx: Transaction<DB>,
   mediaId: number,
-  contentSha256: string | null
+  contentSha256: string | null,
+  metrics?: Metrics
 ): Promise<void> {
   const post = await tx
     .selectFrom("media")
@@ -96,6 +98,7 @@ export async function linkReposts(
   }
 
   await recomputeGroupTotals(tx, groupId);
+  metrics?.inc("repost.linked_total", { reason });
 }
 
 async function createGroup(tx: Transaction<DB>, canonicalMediaId: number): Promise<number> {
