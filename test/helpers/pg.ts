@@ -1,5 +1,5 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { Kysely } from "kysely";
+import { Kysely, sql } from "kysely";
 import pg from "pg";
 import { makeDb } from "../../src/db/pool.js";
 import { runMigrations } from "../../src/db/migrate.js";
@@ -72,8 +72,13 @@ let cloneCounter = 0;
 /**
  * Runs `fn` against a fresh, fully migrated Postgres database. The database
  * is created by cloning the migrated template and is dropped afterwards.
+ * The second argument to `fn` is that database's own connection string, for
+ * tests that need to open a second, independent pool against the same
+ * database (e.g. proving two pools don't share a connection queue).
  */
-export async function withTestDb<T>(fn: (db: Kysely<DB>) => Promise<T>): Promise<T> {
+export async function withTestDb<T>(
+  fn: (db: Kysely<DB>, connectionString: string) => Promise<T>
+): Promise<T> {
   const { baseUrl } = await ensureTemplate();
   const dbName = `t_${Date.now()}_${cloneCounter++}`;
 
@@ -86,10 +91,11 @@ export async function withTestDb<T>(fn: (db: Kysely<DB>) => Promise<T>): Promise
 
   const dbUrl = new URL(baseUrl);
   dbUrl.pathname = `/${dbName}`;
-  const db = makeDb(dbUrl.toString());
+  const connectionString = dbUrl.toString();
+  const db = makeDb(connectionString);
 
   try {
-    return await fn(db);
+    return await fn(db, connectionString);
   } finally {
     await db.destroy();
     const cleanupPool = new pg.Pool({ connectionString: baseUrl });
@@ -103,4 +109,25 @@ export async function withTestDb<T>(fn: (db: Kysely<DB>) => Promise<T>): Promise
       await cleanupPool.end();
     }
   }
+}
+
+/**
+ * Runs `fn` with a Kysely instance whose statements execute as the
+ * tracker_graphql role, inside one transaction using `SET LOCAL ROLE` (so
+ * the role switch never leaks to other statements on the pool). Since
+ * tracker_graphql is NOLOGIN (spec §5) — deliberately, so no test-only
+ * password needs to exist anywhere — this is how tests get a connection
+ * that genuinely runs under that role's real Postgres privileges, without
+ * managing separate credentials. Verified directly against postgres:16
+ * that a real INSERT under SET ROLE tracker_graphql fails with
+ * "permission denied", not merely a grants-metadata check.
+ */
+export async function withGraphqlRole<T>(
+  db: Kysely<DB>,
+  fn: (roleDb: Kysely<DB>) => Promise<T>
+): Promise<T> {
+  return db.transaction().execute(async (tx) => {
+    await sql`SET LOCAL ROLE tracker_graphql`.execute(tx);
+    return fn(tx as unknown as Kysely<DB>);
+  });
 }

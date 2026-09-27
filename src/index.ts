@@ -1,7 +1,7 @@
 import http from "node:http";
 import { loadConfig } from "./config/env.js";
 import { createLogger } from "./http/logger.js";
-import { makeDb } from "./db/pool.js";
+import { makeDb, makeReadDb } from "./db/pool.js";
 import { runMigrations } from "./db/migrate.js";
 import { createApp } from "./http/app.js";
 import { SystemClock } from "./adapters/clock/system-clock.js";
@@ -51,6 +51,15 @@ async function main(): Promise<void> {
 
   const db = makeDb(config.databaseUrl);
   await runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+
+  // A separate, small pool for GraphQL dashboard reads (spec §10, §15.1) so
+  // a saturated dashboard workload can never starve ingestion for
+  // connections. In production this should authenticate as tracker_graphql;
+  // locally/in dev it falls back to the same app connection string, which
+  // is fine for the assignment's scope (no separate credential to manage)
+  // but does NOT enforce read-only at the database level in that case — the
+  // GraphQL server (P3-03/04) is responsible for only ever running reads.
+  const readDb = makeReadDb(config.databaseUrlReadonly ?? config.databaseUrl);
 
   const clock = new SystemClock();
   const metrics = new PromMetrics();
@@ -237,6 +246,7 @@ async function main(): Promise<void> {
     await new Promise<void>((resolve) => metricsServer.close(() => resolve()));
 
     await db.destroy();
+    await readDb.destroy();
     process.exit(0);
   };
 
