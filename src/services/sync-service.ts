@@ -10,6 +10,7 @@ import { assetRepo } from "../db/repositories/asset-repo.js";
 import { syncRunRepo } from "../db/repositories/sync-run-repo.js";
 import { outboxRepo } from "../db/repositories/outbox-repo.js";
 import { rejectedRepo } from "../db/repositories/rejected-repo.js";
+import { refreshGroupTotalsForMedia } from "./repost-service.js";
 
 export interface SyncServiceDeps {
   db: Kysely<DB>;
@@ -128,6 +129,14 @@ export async function runSync(deps: SyncServiceDeps, job: SyncJobInput): Promise
             })
             .onConflict((oc) => oc.columns(["media_id", "captured_at"]).doNothing())
             .execute();
+
+          if (!isNew) {
+            // A repeat sighting changed like/comment counts. If this post
+            // already belongs to a repost group, its totals must be
+            // recomputed here — link detection only runs once, at first
+            // download, so later count changes would otherwise go stale.
+            await refreshGroupTotalsForMedia(tx, mediaId);
+          }
         }
 
         const assetResults = await assetRepo.upsertMany(tx, mediaId, ok.assets);

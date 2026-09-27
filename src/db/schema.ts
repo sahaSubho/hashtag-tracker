@@ -101,7 +101,7 @@ export interface RepostGroupsTable {
   size: Generated<number>;
   total_likes: Generated<number>;
   total_comments: Generated<number>;
-  updated_at: ColumnType<Date, string | undefined, string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 export interface OutboxTable {
