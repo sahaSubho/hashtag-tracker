@@ -1,46 +1,51 @@
 import { Router, type RequestHandler } from "express";
-import { timingSafeEqual } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { DB } from "../../db/schema.js";
 import type { BlobStorage } from "../../ports/blob-storage.js";
+import type { Clock } from "../../ports/clock.js";
 import { deleteMediaByIgId } from "../../services/retention.js";
+import { authenticateApiKey } from "../api-key-auth.js";
 
 export interface InternalStatusRouteDeps {
   db: Kysely<DB>;
   storage: BlobStorage;
-  /**
-   * Bearer token required for every /internal/* route. This is a stopgap:
-   * spec §11/§12.3 calls for the `admin` API-key scope instead, which needs
-   * the api_keys table and auth middleware (plan P3-01). Until then, a
-   * single shared token read from config plays the same
-   * "don't expose internals publicly" role.
-   */
-  adminToken: string;
+  clock: Clock;
 }
 
-function safeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
-}
+const ADMIN_SCOPE = "admin";
 
-function requireAdminToken(adminToken: string): RequestHandler {
-  return (req, res, next) => {
+function requireAdminApiKey(db: Kysely<DB>, clock: Clock): RequestHandler {
+  return async (req, res, next) => {
     const auth = req.get("authorization") ?? "";
-    const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+    const key = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
 
-    if (!token || !safeEqual(token, adminToken)) {
-      res.status(401).json({ error: { code: "unauthorized", message: "invalid admin token" } });
+    if (!key) {
+      res.status(401).json({ error: { code: "unauthorized", message: "missing API key" } });
       return;
     }
+
+    const result = await authenticateApiKey(db, clock, key, ADMIN_SCOPE);
+    if (!result.ok) {
+      res.status(result.reason === "missing_scope" ? 403 : 401).json({
+        error: { code: "unauthorized", message: "invalid or insufficiently-scoped API key" },
+      });
+      return;
+    }
+
     next();
   };
 }
 
+/**
+ * Internal operator endpoints (spec §11, §12.3): status/health snapshot and
+ * one-off media deletion. Gated by an `admin`-scoped API key (plan P3-01) —
+ * these were originally behind a single shared bearer token from config;
+ * that stopgap is now replaced by real, individually-issued and revocable
+ * API keys.
+ */
 export function internalStatusRouter(deps: InternalStatusRouteDeps): Router {
   const router = Router();
-  router.use(requireAdminToken(deps.adminToken));
+  router.use(requireAdminApiKey(deps.db, deps.clock));
 
   router.get("/internal/status", async (_req, res) => {
     const lastRuns = await deps.db

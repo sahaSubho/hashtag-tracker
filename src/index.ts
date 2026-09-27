@@ -215,7 +215,7 @@ async function main(): Promise<void> {
       },
       metrics,
       clock,
-      adminToken: (await secrets.get("INTERNAL_STATUS_ADMIN_TOKEN")) || undefined,
+      enableInternalRoutes: true,
     });
     httpServer = app.listen(config.port, () => {
       logger.info({ port: config.port }, "api listening");

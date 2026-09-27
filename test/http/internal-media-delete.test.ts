@@ -4,6 +4,8 @@ import { withTestDb } from "../helpers/pg.js";
 import { FakeClock, FakeStorage } from "../helpers/fakes.js";
 import { createApp } from "../../src/http/app.js";
 import { mediaRepo } from "../../src/db/repositories/media-repo.js";
+import { apiKeyRepo } from "../../src/db/repositories/api-key-repo.js";
+import { generateApiKey, hashApiKeySecret } from "../../src/domain/api-key.js";
 import type { MappedMedia } from "../../src/domain/types.js";
 
 const cursorKeys = [{ kid: "k1", key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }];
@@ -22,36 +24,41 @@ const media = (over: Partial<MappedMedia> = {}): MappedMedia => ({
   ...over,
 });
 
+async function seedAdminKey(db: any) {
+  const { plaintext, keyId, secret } = generateApiKey();
+  await apiKeyRepo.create(db, { keyId, hash: hashApiKeySecret(secret), name: "test-admin", scopes: ["admin"] });
+  return plaintext;
+}
+
 describe("DELETE /internal/media/:igMediaId", () => {
-  it("401s without the admin token", async () => {
+  it("401s without an API key", async () => {
     await withTestDb(async (db) => {
       const app = createApp({
         db,
         storage: new FakeStorage(),
         cursorKeys,
         hashtag: "matcha",
-        adminToken: "secret-admin-token",
+        enableInternalRoutes: true,
       });
       const res = await request(app).delete("/internal/media/m1");
       expect(res.status).toBe(401);
     });
   });
 
-  it("deletes an existing post with the correct admin token", async () => {
+  it("deletes an existing post with a valid admin-scoped key", async () => {
     await withTestDb(async (db) => {
       const clock = new FakeClock(new Date("2026-09-27T09:00:00Z"));
       await db.transaction().execute((tx) => mediaRepo.upsert(tx, media({ igMediaId: "to-delete" }), clock));
 
+      const key = await seedAdminKey(db);
       const app = createApp({
         db,
         storage: new FakeStorage(),
         cursorKeys,
         hashtag: "matcha",
-        adminToken: "secret-admin-token",
+        enableInternalRoutes: true,
       });
-      const res = await request(app)
-        .delete("/internal/media/to-delete")
-        .set("Authorization", "Bearer secret-admin-token");
+      const res = await request(app).delete("/internal/media/to-delete").set("Authorization", `Bearer ${key}`);
 
       expect(res.status).toBe(200);
       const row = await db.selectFrom("media").selectAll().where("ig_media_id", "=", "to-delete").executeTakeFirst();
@@ -61,16 +68,15 @@ describe("DELETE /internal/media/:igMediaId", () => {
 
   it("returns 404 for an unknown ig_media_id", async () => {
     await withTestDb(async (db) => {
+      const key = await seedAdminKey(db);
       const app = createApp({
         db,
         storage: new FakeStorage(),
         cursorKeys,
         hashtag: "matcha",
-        adminToken: "secret-admin-token",
+        enableInternalRoutes: true,
       });
-      const res = await request(app)
-        .delete("/internal/media/nope")
-        .set("Authorization", "Bearer secret-admin-token");
+      const res = await request(app).delete("/internal/media/nope").set("Authorization", `Bearer ${key}`);
       expect(res.status).toBe(404);
     });
   });

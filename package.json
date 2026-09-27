@@ -13,6 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "node --import tsx src/db/migrate.ts up",
+    "apikey:create": "node --import tsx src/cli/api-key.ts create",
+    "apikey:revoke": "node --import tsx src/cli/api-key.ts revoke",
     "typecheck": "tsc --noEmit",
     "typecheck:all": "tsc --noEmit -p tsconfig.test.json"
   },

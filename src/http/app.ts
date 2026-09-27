@@ -34,10 +34,10 @@ export interface AppDeps {
   trustProxy?: number;
   /** Omitted disables the http_request_duration_seconds observation (spec §12.2). */
   metrics?: Metrics;
-  /** Used by /readyz's staleness check. Defaults to the real system clock. */
+  /** Used by /readyz's staleness check, and by API-key expiry checks. Defaults to the real system clock. */
   clock?: Clock;
-  /** Omitted disables GET /internal/status entirely (404, not just unauthorized). */
-  adminToken?: string;
+  /** Omitted (default false) disables /internal/* entirely (404, not just unauthorized). Auth is always a real admin-scoped API key. */
+  enableInternalRoutes?: boolean;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -72,8 +72,8 @@ export function createApp(deps: AppDeps): Express {
   if (deps.storageDir) {
     app.use(filesRouter({ storageDir: deps.storageDir }));
   }
-  if (deps.adminToken) {
-    app.use(internalStatusRouter({ db: deps.db, storage: deps.storage, adminToken: deps.adminToken }));
+  if (deps.enableInternalRoutes) {
+    app.use(internalStatusRouter({ db: deps.db, storage: deps.storage, clock: deps.clock ?? new SystemClock() }));
   }
 
   app.use((_req, res) => {

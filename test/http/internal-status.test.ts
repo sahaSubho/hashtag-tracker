@@ -6,39 +6,62 @@ import { createApp } from "../../src/http/app.js";
 import { hashtagRepo } from "../../src/db/repositories/hashtag-repo.js";
 import { syncRunRepo } from "../../src/db/repositories/sync-run-repo.js";
 import { outboxRepo } from "../../src/db/repositories/outbox-repo.js";
+import { apiKeyRepo } from "../../src/db/repositories/api-key-repo.js";
+import { generateApiKey, hashApiKeySecret } from "../../src/domain/api-key.js";
 
 const cursorKeys = [{ kid: "k1", key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }];
 
+async function seedAdminKey(db: any, scopes: string[] = ["admin"]) {
+  const { plaintext, keyId, secret } = generateApiKey();
+  await apiKeyRepo.create(db, { keyId, hash: hashApiKeySecret(secret), name: "test-admin", scopes });
+  return plaintext;
+}
+
 describe("GET /internal/status", () => {
-  it("401s without the admin token", async () => {
+  it("401s without an API key", async () => {
     await withTestDb(async (db) => {
       const app = createApp({
         db,
         storage: new FakeStorage(),
         cursorKeys,
         hashtag: "matcha",
-        adminToken: "secret-admin-token",
+        enableInternalRoutes: true,
       });
       const res = await request(app).get("/internal/status");
       expect(res.status).toBe(401);
     });
   });
 
-  it("401s with the wrong admin token", async () => {
+  it("401s with a malformed key", async () => {
     await withTestDb(async (db) => {
       const app = createApp({
         db,
         storage: new FakeStorage(),
         cursorKeys,
         hashtag: "matcha",
-        adminToken: "secret-admin-token",
+        enableInternalRoutes: true,
       });
       const res = await request(app).get("/internal/status").set("Authorization", "Bearer wrong");
       expect(res.status).toBe(401);
     });
   });
 
-  it("returns a status summary with the correct admin token", async () => {
+  it("403s with a valid key that lacks the admin scope", async () => {
+    await withTestDb(async (db) => {
+      const key = await seedAdminKey(db, ["dashboard:read"]);
+      const app = createApp({
+        db,
+        storage: new FakeStorage(),
+        cursorKeys,
+        hashtag: "matcha",
+        enableInternalRoutes: true,
+      });
+      const res = await request(app).get("/internal/status").set("Authorization", `Bearer ${key}`);
+      expect(res.status).toBe(403);
+    });
+  });
+
+  it("returns a status summary with a valid admin-scoped key", async () => {
     await withTestDb(async (db) => {
       const clock = new FakeClock(new Date("2026-09-27T12:00:00Z"));
       const hashtag = await hashtagRepo.upsertOnce(db, "matcha", "17843");
@@ -52,16 +75,15 @@ describe("GET /internal/status", () => {
         .transaction()
         .execute((tx) => outboxRepo.enqueue(tx, "DOWNLOAD_ASSET", { assetId: 1 }, clock.now()));
 
+      const key = await seedAdminKey(db);
       const app = createApp({
         db,
         storage: new FakeStorage(),
         cursorKeys,
         hashtag: "matcha",
-        adminToken: "secret-admin-token",
+        enableInternalRoutes: true,
       });
-      const res = await request(app)
-        .get("/internal/status")
-        .set("Authorization", "Bearer secret-admin-token");
+      const res = await request(app).get("/internal/status").set("Authorization", `Bearer ${key}`);
 
       expect(res.status).toBe(200);
       expect(res.body.lastRuns).toBeDefined();
@@ -69,7 +91,7 @@ describe("GET /internal/status", () => {
     });
   });
 
-  it("when no adminToken is configured, the endpoint is disabled (404)", async () => {
+  it("when internal routes are not enabled, the endpoint is disabled (404)", async () => {
     await withTestDb(async (db) => {
       const app = createApp({ db, storage: new FakeStorage(), cursorKeys, hashtag: "matcha" });
       const res = await request(app).get("/internal/status");

@@ -12,6 +12,9 @@ export default defineConfig({
     // Cap how many test files run at once so they don't all open
     // Testcontainers/Postgres connections simultaneously and starve each
     // other — this is what caused the intermittent 30s timeout above.
-    maxWorkers: 4,
+    // Lowered from 4 after observing full-suite runs stall for minutes at
+    // a time on a resource-constrained dev machine with 4 concurrent
+    // Postgres containers; 2 trades some wall-clock time for reliability.
+    maxWorkers: 2,
   },
 });
