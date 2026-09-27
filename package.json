@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "node --import tsx src/db/migrate.ts up",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:all": "tsc --noEmit -p tsconfig.test.json"
   },
   "license": "UNLICENSED",
   "dependencies": {
