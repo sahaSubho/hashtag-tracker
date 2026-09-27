@@ -14,8 +14,8 @@ export interface FilesRouteDeps {
 export function filesRouter(deps: FilesRouteDeps): Router {
   const router = Router();
 
-  router.get("/files/*", async (req, res) => {
-    const key = (req.params as unknown as { 0: string })[0];
+  router.get("/files/*splat", async (req, res) => {
+    const key = (req.params as unknown as { splat: string[] }).splat.join("/");
     if (!key || key.includes("..")) {
       res.status(400).end();
       return;
