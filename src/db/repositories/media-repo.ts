@@ -88,4 +88,49 @@ export const mediaRepo = {
   async findById(db: Kysely<DB>, id: number) {
     return db.selectFrom("media").selectAll().where("id", "=", id).executeTakeFirst();
   },
+
+  /**
+   * Keyset page over media, newest-post-first, reposts excluded (spec §9).
+   * `after` is the last row's (ig_timestamp, id) from the previous page,
+   * so a post inserted between page reads is never duplicated or skipped
+   * — unlike offset pagination, which shifts under concurrent writes.
+   * Fetches one extra row to determine `hasMore` without a second query.
+   */
+  async feedPage(
+    db: Kysely<DB>,
+    hashtagId: number,
+    limit: number,
+    after: { t: Date; id: number } | null
+  ) {
+    let query = db
+      .selectFrom("media")
+      .innerJoin("media_hashtags", "media_hashtags.media_id", "media.id")
+      .selectAll("media")
+      .where("media_hashtags.hashtag_id", "=", hashtagId)
+      .where("media.duplicate_of_id", "is", null)
+      .orderBy("media.ig_timestamp", "desc")
+      .orderBy("media.id", "desc")
+      .limit(limit + 1);
+
+    if (after) {
+      query = query.where((eb) =>
+        eb.or([
+          eb("media.ig_timestamp", "<", after.t),
+          eb.and([eb("media.ig_timestamp", "=", after.t), eb("media.id", "<", after.id)]),
+        ])
+      );
+    }
+
+    return query.execute();
+  },
+
+  async findAssetsForMediaIds(db: Kysely<DB>, mediaIds: number[]) {
+    if (mediaIds.length === 0) return [];
+    return db
+      .selectFrom("media_assets")
+      .selectAll()
+      .where("media_id", "in", mediaIds)
+      .orderBy("position", "asc")
+      .execute();
+  },
 };
