@@ -191,6 +191,7 @@ export class FakeDownloader implements HttpDownloader {
         for (const chunk of chunks) yield chunk;
       })(),
       contentType: resp.headers?.["content-type"] ?? null,
+      headers: resp.headers ?? {},
     };
   }
 }

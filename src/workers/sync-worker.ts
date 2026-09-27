@@ -13,6 +13,7 @@ interface SyncJobPayload {
   edge: "top" | "recent";
   parentRunId?: string;
   cursor?: string | null;
+  temporaryAttempt?: number;
 }
 
 /**
@@ -44,6 +45,7 @@ export class SyncWorker {
           edge: payload.edge,
           parentRunId: payload.parentRunId,
           cursor: payload.cursor,
+          temporaryAttempt: payload.temporaryAttempt,
         }
       );
       await this.deps.queue.ack(job);

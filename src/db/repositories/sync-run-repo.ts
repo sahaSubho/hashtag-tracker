@@ -71,6 +71,28 @@ export const syncRunRepo = {
       .execute();
   },
 
+  /**
+   * Records a resumable pause (a rate-limit or temporary Meta error, spec
+   * §8): saves the resume cursor and the last error, but does NOT set
+   * finished_at or change status away from RUNNING — the run genuinely
+   * hasn't finished, it's just waiting on a re-enqueued follow-up job.
+   */
+  async recordPause(
+    tx: Transaction<DB>,
+    runId: string,
+    input: { resumeCursor: string | null; errorCode: string; errorMessage: string }
+  ) {
+    await tx
+      .updateTable("sync_runs")
+      .set({
+        resume_cursor: input.resumeCursor,
+        error_code: input.errorCode,
+        error_message: input.errorMessage,
+      })
+      .where("id", "=", runId)
+      .execute();
+  },
+
   async closeParentGap(tx: Transaction<DB>, parentRunId: string) {
     await tx
       .updateTable("sync_runs")

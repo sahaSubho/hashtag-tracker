@@ -16,11 +16,17 @@ export class NodeFetchDownloader implements HttpDownloader {
         signal: controller.signal,
       });
 
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        headers[key.toLowerCase()] = value;
+      });
+
       return {
         status: response.status,
         location: response.headers.get("location"),
         contentType: response.headers.get("content-type"),
         body: streamBody(response),
+        headers,
       };
     } finally {
       clearTimeout(timeout);

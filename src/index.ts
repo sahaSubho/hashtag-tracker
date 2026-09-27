@@ -56,6 +56,14 @@ async function main(): Promise<void> {
     igUserId: config.metaIgUserId,
     apiVersion: config.metaApiVersion,
     fields: META_FIELDS,
+    clock,
+    refreshAccessToken: async () => {
+      const refreshed = await secrets.get("META_ACCESS_TOKEN");
+      if (!refreshed) {
+        throw new Error("META_ACCESS_TOKEN is required but became unavailable during refresh");
+      }
+      return refreshed;
+    },
   });
 
   const intervals: ReturnType<typeof setInterval>[] = [];

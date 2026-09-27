@@ -3,17 +3,21 @@ import { HttpMetaClient } from "../../src/adapters/meta/http-meta-client.js";
 import { metaClientContract } from "../contract/meta-client.contract.js";
 import type { HttpDownloader } from "../../src/ports/http-downloader.js";
 
+// A body's async-generator can only be iterated once, but tests may call
+// the client multiple times against the same scripted URL (e.g. to observe
+// throttle behavior across calls) — so responses are built fresh per get()
+// via a factory, not stored pre-built.
 function jsonResponse(body: unknown, headers: Record<string, string> = {}) {
   const encoder = new TextEncoder();
-  return {
+  return () => ({
     status: 200,
     location: null,
     contentType: "application/json",
     body: (async function* () {
       yield encoder.encode(JSON.stringify(body));
     })(),
-    _headers: headers,
-  };
+    headers,
+  });
 }
 
 /** A minimal scripted HttpDownloader that also exposes response headers. */
@@ -25,9 +29,9 @@ class ScriptedHttpClient implements HttpDownloader {
     this.requestedUrls.push(url);
     const parsed = new URL(url);
     const key = parsed.origin + parsed.pathname;
-    const resp = this.responses.get(key);
-    if (!resp) throw new Error(`no scripted response for ${key}`);
-    return resp;
+    const factory = this.responses.get(key);
+    if (!factory) throw new Error(`no scripted response for ${key}`);
+    return factory();
   }
 }
 
@@ -153,14 +157,15 @@ describe("HttpMetaClient", () => {
     expect(page.nextCursor).toBe("abc");
   });
 
-  it("usagePct is null in Phase 1 — the HttpDownloader port carries no response headers yet", async () => {
-    // The Meta throttle that reads X-Business-Use-Case-Usage is a Phase 2
-    // task (spec §8, plan P2-01). Reading it needs the HttpDownloader port
-    // extended to expose response headers, which P2-01 will add alongside
-    // the throttle itself. Until then, MetaPage.usagePct is always null —
-    // a valid value per its type — and callers must not assume otherwise.
+  it("usagePct reflects the X-Business-Use-Case-Usage header from the response", async () => {
     const responses = new Map<string, ReturnType<typeof jsonResponse>>();
-    responses.set("https://graph.facebook.com/v24.0/17843/recent_media", jsonResponse({ data: [] }));
+    responses.set(
+      "https://graph.facebook.com/v24.0/17843/recent_media",
+      jsonResponse(
+        { data: [] },
+        { "x-business-use-case-usage": JSON.stringify({ "123": [{ call_count: 42 }] }) }
+      )
+    );
     const http = new ScriptedHttpClient(responses);
     const client = new HttpMetaClient({
       http,
@@ -171,6 +176,140 @@ describe("HttpMetaClient", () => {
       fields: FIELDS,
     });
     const page = await client.media("recent", "17843", null);
-    expect(page.usagePct).toBeNull();
+    expect(page.usagePct).toBe(42);
+  });
+
+  it("spaces out the next call once usage is at or above 80%", async () => {
+    const responses = new Map<string, ReturnType<typeof jsonResponse>>();
+    responses.set(
+      "https://graph.facebook.com/v24.0/17843/recent_media",
+      jsonResponse(
+        { data: [] },
+        { "x-business-use-case-usage": JSON.stringify({ "123": [{ call_count: 85 }] }) }
+      )
+    );
+    const http = new ScriptedHttpClient(responses);
+    const sleeps: number[] = [];
+    const client = new HttpMetaClient({
+      http,
+      accessToken: "test-token",
+      appSecret: undefined,
+      igUserId: "123",
+      apiVersion: "v24.0",
+      fields: FIELDS,
+      sleep: (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    await client.media("recent", "17843", null); // records 85% usage
+    await client.media("recent", "17843", null); // should be spaced out this time
+    expect(sleeps.length).toBeGreaterThan(0);
+  });
+
+  it("pauses until the reset time once usage hits 100%", async () => {
+    const responses = new Map<string, ReturnType<typeof jsonResponse>>();
+    responses.set(
+      "https://graph.facebook.com/v24.0/17843/recent_media",
+      jsonResponse(
+        { data: [] },
+        {
+          "x-business-use-case-usage": JSON.stringify({
+            "123": [{ call_count: 100, estimated_time_to_regain_access: 5 }],
+          }),
+        }
+      )
+    );
+    const http = new ScriptedHttpClient(responses);
+    const sleeps: number[] = [];
+    const client = new HttpMetaClient({
+      http,
+      accessToken: "test-token",
+      appSecret: undefined,
+      igUserId: "123",
+      apiVersion: "v24.0",
+      fields: FIELDS,
+      sleep: (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    await client.media("recent", "17843", null); // records 100% usage, 5 min reset
+    await client.media("recent", "17843", null); // pauses 5 minutes before this call
+    expect(sleeps).toContain(5 * 60 * 1000);
+  });
+
+  it("classifies a rate-limit error code as retryable (retryable=true)", async () => {
+    const responses = new Map<string, any>();
+    responses.set(
+      "https://graph.facebook.com/v24.0/17843/recent_media",
+      jsonResponse({ error: { code: 4, message: "rate limited" } })
+    );
+    const http = new ScriptedHttpClient(responses);
+    const client = new HttpMetaClient({
+      http,
+      accessToken: "test-token",
+      appSecret: undefined,
+      igUserId: "123",
+      apiVersion: "v24.0",
+      fields: FIELDS,
+    });
+
+    try {
+      await client.media("recent", "17843", null);
+      expect.unreachable();
+    } catch (err: any) {
+      expect(err.code).toBe(4);
+      expect(err.category).toBe("rate_limit");
+    }
+  });
+
+  it("classifies a token error (190) as fatal (category=fatal)", async () => {
+    const responses = new Map<string, any>();
+    responses.set(
+      "https://graph.facebook.com/v24.0/17843/recent_media",
+      jsonResponse({ error: { code: 190, message: "invalid token" } })
+    );
+    const http = new ScriptedHttpClient(responses);
+    const client = new HttpMetaClient({
+      http,
+      accessToken: "test-token",
+      appSecret: undefined,
+      igUserId: "123",
+      apiVersion: "v24.0",
+      fields: FIELDS,
+    });
+
+    try {
+      await client.media("recent", "17843", null);
+      expect.unreachable();
+    } catch (err: any) {
+      expect(err.code).toBe(190);
+      expect(err.category).toBe("fatal");
+    }
+  });
+
+  it("classifies an unknown error code as temporary by default", async () => {
+    const responses = new Map<string, any>();
+    responses.set(
+      "https://graph.facebook.com/v24.0/17843/recent_media",
+      jsonResponse({ error: { code: 2, message: "server error" } })
+    );
+    const http = new ScriptedHttpClient(responses);
+    const client = new HttpMetaClient({
+      http,
+      accessToken: "test-token",
+      appSecret: undefined,
+      igUserId: "123",
+      apiVersion: "v24.0",
+      fields: FIELDS,
+    });
+
+    try {
+      await client.media("recent", "17843", null);
+      expect.unreachable();
+    } catch (err: any) {
+      expect(err.category).toBe("temporary");
+    }
   });
 });
