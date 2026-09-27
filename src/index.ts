@@ -225,6 +225,7 @@ async function main(): Promise<void> {
       metrics,
       clock,
       enableInternalRoutes: true,
+      readDb,
     });
     httpServer = app.listen(config.port, () => {
       logger.info({ port: config.port }, "api listening");

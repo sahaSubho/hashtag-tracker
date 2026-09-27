@@ -89,24 +89,42 @@ export const mediaRepo = {
     return db.selectFrom("media").selectAll().where("id", "=", id).executeTakeFirst();
   },
 
+  /** Batched lookup for DataLoader — one SQL statement for any number of ids. */
+  async findByIds(db: Kysely<DB>, ids: number[]) {
+    if (ids.length === 0) return [];
+    return db.selectFrom("media").selectAll().where("id", "in", ids).execute();
+  },
+
   /**
    * Keyset page over media, newest-post-first, reposts excluded (spec §9).
    * `after` is the last row's (ig_timestamp, id) from the previous page,
    * so a post inserted between page reads is never duplicated or skipped
    * — unlike offset pagination, which shifts under concurrent writes.
    * Fetches one extra row to determine `hasMore` without a second query.
+   *
+   * `hashtagId` is optional: REST's `GET /hashtags` always scopes to one
+   * hashtag (`?tag=`), while GraphQL's `Query.posts` (spec §10) has no
+   * hashtag argument — the dashboard tracks a single hashtag, so it pages
+   * over all non-repost media directly. Both callers share this one
+   * implementation, which is what makes "a post's counts via GraphQL
+   * match GET /hashtags" a structural guarantee rather than two
+   * independently-written queries that happen to agree.
    */
   async feedPage(
     db: Kysely<DB>,
-    hashtagId: number,
+    hashtagId: number | null,
     limit: number,
     after: { t: Date; id: number } | null
   ) {
-    let query = db
-      .selectFrom("media")
-      .innerJoin("media_hashtags", "media_hashtags.media_id", "media.id")
-      .selectAll("media")
-      .where("media_hashtags.hashtag_id", "=", hashtagId)
+    let query = db.selectFrom("media").selectAll("media");
+
+    if (hashtagId !== null) {
+      query = query
+        .innerJoin("media_hashtags", "media_hashtags.media_id", "media.id")
+        .where("media_hashtags.hashtag_id", "=", hashtagId);
+    }
+
+    query = query
       .where("media.duplicate_of_id", "is", null)
       .orderBy("media.ig_timestamp", "desc")
       .orderBy("media.id", "desc")

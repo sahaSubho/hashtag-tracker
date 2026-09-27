@@ -11,6 +11,7 @@ import { hashtagsRouter } from "./routes/hashtags.js";
 import { filesRouter } from "./routes/files.js";
 import { healthRouter } from "./routes/health.js";
 import { internalStatusRouter } from "./routes/internal-status.js";
+import { graphqlRouter } from "./routes/graphql.js";
 import { rateLimitMiddleware, type RateLimitConfig } from "./rate-limit-middleware.js";
 
 declare global {
@@ -38,6 +39,8 @@ export interface AppDeps {
   clock?: Clock;
   /** Omitted (default false) disables /internal/* entirely (404, not just unauthorized). Auth is always a real admin-scoped API key. */
   enableInternalRoutes?: boolean;
+  /** Kysely instance for GraphQL reads (spec §10) — the separate P3-02 pool, distinct from `db`. Omitted disables /graphql entirely. */
+  readDb?: Kysely<DB>;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -74,6 +77,17 @@ export function createApp(deps: AppDeps): Express {
   }
   if (deps.enableInternalRoutes) {
     app.use(internalStatusRouter({ db: deps.db, storage: deps.storage, clock: deps.clock ?? new SystemClock() }));
+  }
+  if (deps.readDb) {
+    app.use(
+      graphqlRouter({
+        readDb: deps.readDb,
+        db: deps.db,
+        storage: deps.storage,
+        cursorKeys: deps.cursorKeys,
+        clock: deps.clock ?? new SystemClock(),
+      })
+    );
   }
 
   app.use((_req, res) => {
