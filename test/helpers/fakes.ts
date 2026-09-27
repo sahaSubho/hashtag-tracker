@@ -183,13 +183,10 @@ export class FakeDownloader implements HttpDownloader {
     if (!resp) {
       throw new Error(`FakeDownloader: no scripted response for ${url}`);
     }
-    if (resp.status >= 400) {
-      const err = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
-      err.status = resp.status;
-      throw err;
-    }
     const chunks = resp.bodyChunks ?? [];
     return {
+      status: resp.status,
+      location: resp.redirectTo ?? null,
       body: (async function* () {
         for (const chunk of chunks) yield chunk;
       })(),
