@@ -12,6 +12,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "db:setup": "node --import tsx src/db/setup-roles.ts",
     "migrate": "node --import tsx src/db/migrate.ts up",
     "apikey:create": "node --import tsx src/cli/api-key.ts create",
     "apikey:revoke": "node --import tsx src/cli/api-key.ts revoke",

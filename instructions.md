@@ -15,7 +15,8 @@ cp .env.example .env
 # edit .env: set META_ACCESS_TOKEN and META_IG_USER_ID to real values,
 # and generate a CURSOR_SIGNING_KEYS value with:
 #   echo "k1:$(openssl rand -base64 32)"
-npm run migrate               # applies all migrations
+npm run db:setup              # once, as the superuser: lets the tracker_* roles log in
+npm run migrate               # applies all migrations, as tracker_migrator
 npm run dev                   # starts the app (all roles, from APP_ROLES)
 ```
 
@@ -33,6 +34,8 @@ npm test              # all tests (currently ~360, ~20-25s)
 npm run typecheck     # src/ only
 npm run typecheck:all # src/ + test/
 ```
+
+Every command loads `.env` itself (`src/config/load-env-file.ts`, Node's built-in parser); variables already set in the shell win over the file, so e.g. `APP_ROLES=api npm run dev` works. The app never runs migrations on startup — after pulling a change that adds one, run `npm run migrate` before restarting.
 
 **A note on ports:** if `npm run dev` or the tests seem to hit something unexpected on `localhost:5432` or `localhost:3000`, check for another process already bound to those ports. Nothing in this project assumes exclusive use of those ports.
 
@@ -70,7 +73,8 @@ The plaintext key (`dash_<keyId>_<secret>`) is printed once, at creation time, a
 | `METRICS_PORT` | `9100` | Prometheus `/metrics`, served on a separate port |
 | `DATABASE_URL` | — | **required** |
 | `DATABASE_URL_READONLY` | — | The GraphQL dashboard's own pool (spec §10/§15.1); falls back to `DATABASE_URL` locally, which does **not** enforce read-only at the DB level in that case — only a real `tracker_graphql` connection string does |
-| `DATABASE_URL_MIGRATOR` | — | Falls back to `DATABASE_URL` if unset |
+| `DATABASE_URL_MIGRATOR` | — | Used only by `npm run migrate`; falls back to `DATABASE_URL` if unset. Must connect as `tracker_migrator` for `npm run db:setup` |
+| `DATABASE_URL_ADMIN` | — | Superuser connection string, used only by `npm run db:setup` (local dev); `db:setup` reads each role's password from the three URLs above |
 | `SECRETS_SOURCE` | `env` | `env` (local) or `aws` (Secrets Manager) — see `production`. Also switches the queue/storage/alert-sink backend (see `src/index.ts`'s `usingAws` flag) |
 | `AWS_REGION` | `us-east-1` | Only used when `SECRETS_SOURCE=aws` |
 | `AWS_SQS_QUEUE_URL` / `AWS_S3_BUCKET` / `AWS_SNS_ALERT_TOPIC_ARN` | — | **required when `SECRETS_SOURCE=aws`** (the app fails fast with a clear error if unset) |
@@ -114,6 +118,7 @@ See `.env.example` for a filled-in template with placeholder values (including t
 - **Infrastructure as code:** a separate Pulumi TypeScript project (`infra/`) for the full production stack, with a CrossGuard policy pack and `setMocks`-based unit tests proving the least-privilege IAM scoping actually holds — see `production` below for what this does and doesn't cover.
 
 **What is explicitly out of scope, and why:**
+- **Carousels are stored with their cover image only.** Requesting `children{...}` on the hashtag edges makes Meta reject `top_media` with code 1 ("reduce the amount of data") at every page size, verified against the live API, and hashtag media belongs to other accounts, so the remaining carousel items can't be fetched per post either. A page that still hits that error is retried at limit 25 → 10 → 5 (`src/adapters/meta/http-meta-client.ts`).
 - **Repost detection is limited to exact bytes and caption matching.** A re-encoded or cropped repost is not detected. Image-similarity hashing (e.g. perceptual hashing) would catch this but needs a different index structure and was out of scope for the time available.
 - **Only 5 of the spec's alert conditions are implemented** (§12.4 names more): `sync_overdue:{edge}`, `outbox_stalled`, `freshness_burn_rate_fast`/`_slow`, and `sync_gap_unrecoverable:{runId}`. Not implemented: Meta-token-health alerts, an assets-stuck alert, a Meta-usage-high alert, a dead-letter alert, and a read-path-degraded alert — all designed in the spec, none built, since the watchdog only checks the conditions listed above.
 - **Only SLO 1 (freshness) has a calculator.** SLOs 2-7 (completeness, asset capture, durability, REST/GraphQL availability and latency) are defined with targets in the spec (§14) but have no corresponding query against this codebase's data yet.
@@ -132,7 +137,7 @@ This section is deliberately concrete rather than a restatement of the design sp
 1. `cd infra && npm install`
 2. Set the required Pulumi config: `pulumi config set albCertificateArn <acm-cert-arn>` and `pulumi config set containerImage <ecr-image-uri>`. `pulumi config set hashtagId <id>` once the hashtag has been bootstrapped once (see step 4) — the EventBridge schedule needs it in its message body.
 3. `pulumi preview`, then `pulumi up`, from an account with real AWS credentials (never done from this repo's own sessions).
-4. **Database roles are not managed by Pulumi.** RDS creates the instance; the app's own migrations (`0001_roles.ts` onward) create `tracker_migrator`/`tracker_app`/`tracker_graphql` and their grants. Run migrations once, manually, against the new RDS instance before any service starts — the `infra/index.ts`-created migration task definition (`migrationTaskDefinitionArn` in the stack's outputs) is meant to be run via `aws ecs run-task` in a deploy pipeline step that happens **before** the 4 services below are updated, exactly as spec §15.1 describes for rolling-deploy safety. `test/integration/migration-compat.test.ts` and its `test/fixtures/schema-baseline.ts` fixture are the automated guardrail that a later migration doesn't silently break old code still running during that rollout.
+4. **Database roles are not managed by Pulumi.** RDS creates the instance; the app's own migrations (`0001_roles.ts` onward) create `tracker_migrator`/`tracker_app`/`tracker_graphql` and their grants, deliberately `NOLOGIN` with no password. `npm run db:setup` is local-only, so in production an operator must give each role its login (a Secrets Manager password or RDS IAM auth) as part of bootstrapping the instance. Run migrations once, manually, against the new RDS instance before any service starts — the `infra/index.ts`-created migration task definition (`migrationTaskDefinitionArn` in the stack's outputs) is meant to be run via `aws ecs run-task` in a deploy pipeline step that happens **before** the 4 services below are updated, exactly as spec §15.1 describes for rolling-deploy safety. `test/integration/migration-compat.test.ts` and its `test/fixtures/schema-baseline.ts` fixture are the automated guardrail that a later migration doesn't silently break old code still running during that rollout.
 5. **Secrets are created empty, on purpose** (`infra/components/secrets.ts`): after `pulumi up`, set the real values once, out-of-band, e.g. `aws secretsmanager put-secret-value --secret-id <arn-from-stack-output> --secret-string '<value>'`. Never through Pulumi — a value would then live in Pulumi state.
 6. **The Network Firewall's egress allowlist is created but not wired into routing.** `infra/components/firewall.ts` creates the real rule group (allowlisting `graph.facebook.com`, `.cdninstagram.com`, `.fbcdn.net`), policy, and firewall endpoint — but redirecting the private subnets' NAT-bound egress through that endpoint requires VPC route-table changes specific to the exact AZ/NAT topology, which this stack does not make automatically (see that file's own doc comment for why). Wire this by hand, or extend `infra/components/network.ts`'s route tables, before relying on it as a real SSRF backstop in production; until then, the network firewall is the application-level `src/domain/ssrf.ts` guard.
 7. `SHUTDOWN_GRACE_MS` (25000, app default) must stay below the ECS task definitions' `stopTimeout` (30, set in `infra/components/ecs.ts`) — confirmed already consistent, but re-check this if either number changes.
