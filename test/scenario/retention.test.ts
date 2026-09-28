@@ -91,7 +91,7 @@ describe("runRetentionOnce", () => {
       const row = await db.transaction().execute((tx) => outboxRepo.enqueue(tx, "X", {}, clock.now()));
       void row;
       const claimed = await db.transaction().execute((tx) => outboxRepo.claimBatch(tx, 10, clock.now()));
-      await db.transaction().execute((tx) => outboxRepo.markPublished(tx, claimed[0]!.id));
+      await db.transaction().execute((tx) => outboxRepo.markPublished(tx, claimed[0]!.id, clock.now()));
 
       clock.advance(8 * 24 * 60 * 60 * 1000);
       const storage = new FakeStorage();

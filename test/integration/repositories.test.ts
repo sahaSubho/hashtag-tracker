@@ -225,6 +225,19 @@ describe("outboxRepo", () => {
     });
   });
 
+  it("markPublished stamps published_at with the caller's time, not the wall clock", async () => {
+    await withTestDb(async (db) => {
+      const clock = new FakeClock(new Date("2020-01-01T00:00:00Z"));
+      await db.transaction().execute((tx) => outboxRepo.enqueue(tx, "TEST_KIND", {}, clock.now()));
+      const [row] = await db.transaction().execute((tx) => outboxRepo.claimBatch(tx, 10, clock.now()));
+
+      await db.transaction().execute((tx) => outboxRepo.markPublished(tx, row!.id, clock.now()));
+
+      const stored = await db.selectFrom("outbox").select("published_at").executeTakeFirstOrThrow();
+      expect(stored.published_at).toEqual(new Date("2020-01-01T00:00:00Z"));
+    });
+  });
+
   it("markPublished excludes a row from future claims", async () => {
     await withTestDb(async (db) => {
       const clock = new FakeClock(new Date("2026-09-27T09:00:00Z"));
@@ -234,7 +247,7 @@ describe("outboxRepo", () => {
       const claimed = await db
         .transaction()
         .execute((tx) => outboxRepo.claimBatch(tx, 10, clock.now()));
-      await db.transaction().execute((tx) => outboxRepo.markPublished(tx, claimed[0]!.id));
+      await db.transaction().execute((tx) => outboxRepo.markPublished(tx, claimed[0]!.id, clock.now()));
 
       const claimedAgain = await db
         .transaction()

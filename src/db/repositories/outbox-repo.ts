@@ -43,10 +43,11 @@ export const outboxRepo = {
     return rows.map((r) => ({ id: r.id, kind: r.kind, payload: r.payload }));
   },
 
-  async markPublished(tx: Transaction<DB>, id: number): Promise<void> {
+  /** `now` comes from the caller's Clock, like every other timestamp here, so retention's age cutoff is testable. */
+  async markPublished(tx: Transaction<DB>, id: number, now: Date): Promise<void> {
     await tx
       .updateTable("outbox")
-      .set({ published_at: new Date(), attempts: (eb) => eb("attempts", "+", 1) })
+      .set({ published_at: now, attempts: (eb) => eb("attempts", "+", 1) })
       .where("id", "=", id)
       .execute();
   },

@@ -32,7 +32,7 @@ export async function runRelayOnce(deps: RelayDeps): Promise<number> {
 
   for (const row of rows) {
     await queue.enqueue(row.kind, row.payload);
-    await db.transaction().execute((tx) => outboxRepo.markPublished(tx, row.id));
+    await db.transaction().execute((tx) => outboxRepo.markPublished(tx, row.id, clock.now()));
     metrics.inc("outbox.published", { kind: row.kind });
   }
 

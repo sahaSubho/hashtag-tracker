@@ -51,7 +51,9 @@ describe("runRelayOnce — outbox publish recovery (failure mode D)", () => {
       expect(jobs.length).toBe(1);
 
       const row = await db.selectFrom("outbox").selectAll().executeTakeFirstOrThrow();
-      expect(row.published_at).not.toBeNull();
+      // Stamped from the relay's injected clock, not the wall clock, so
+      // retention's "published more than 7 days ago" is deterministic.
+      expect(row.published_at).toEqual(clock.now());
     });
   });
 
