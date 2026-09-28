@@ -4,8 +4,17 @@ import type { DB } from "../../db/schema.js";
 import type { BlobStorage } from "../../ports/blob-storage.js";
 import type { Clock } from "../../ports/clock.js";
 import type { CursorSigningKey } from "../../domain/cursor.js";
+import type { RateLimitStore } from "../../ports/rate-limit-store.js";
 import { authenticateApiKey } from "../api-key-auth.js";
 import { createGraphqlServer } from "../../graphql/server.js";
+import type { ResponseCache } from "../../graphql/response-cache.js";
+
+declare module "express-serve-static-core" {
+  interface Request {
+    /** Set by requireDashboardApiKey once auth succeeds; read by the yoga context factory for caching/rate-limiting keys. */
+    apiKeyId?: string;
+  }
+}
 
 export interface GraphqlRouteDeps {
   readDb: Kysely<DB>;
@@ -13,6 +22,11 @@ export interface GraphqlRouteDeps {
   storage: BlobStorage;
   cursorKeys: CursorSigningKey[];
   clock: Clock;
+  nodeEnv?: string;
+  rateLimitStore?: RateLimitStore;
+  costPerMin?: number;
+  /** Owned by the caller so it can be cleared on sync completion (spec §10). Created internally if omitted. */
+  responseCache?: ResponseCache;
 }
 
 const DASHBOARD_SCOPE = "dashboard:read";
@@ -40,6 +54,7 @@ function requireDashboardApiKey(db: Kysely<DB>, clock: Clock): RequestHandler {
       return;
     }
 
+    req.apiKeyId = result.keyId;
     next();
   };
 }
@@ -58,8 +73,18 @@ export function graphqlRouter(deps: GraphqlRouteDeps): Router {
     storage: deps.storage,
     cursorKeys: deps.cursorKeys,
     graphqlEndpoint: GRAPHQL_ENDPOINT,
+    nodeEnv: deps.nodeEnv,
+    rateLimitStore: deps.rateLimitStore,
+    costPerMin: deps.costPerMin,
+    responseCache: deps.responseCache,
   });
 
-  router.use(GRAPHQL_ENDPOINT, yoga);
+  // Passing `req` as yoga's extra server context (its documented Express
+  // integration point) is what makes `req.apiKeyId`, set by the auth
+  // middleware above, reachable from the GraphQL context factory in
+  // server.ts — yoga's own `context.request` is a reconstructed WHATWG
+  // Request, not this Express req, so it never carries values Express
+  // middleware attached upstream.
+  router.use(GRAPHQL_ENDPOINT, (req, res) => yoga.handle(req, res, { req }));
   return router;
 }

@@ -35,6 +35,13 @@ export interface SyncServiceDeps {
   syncMaxItems: number;
   syncSkewMinutes: number;
   maxTemporaryRetries?: number;
+  /**
+   * Called whenever a sync run reaches a terminal, non-running status
+   * (SUCCESS/TRUNCATED/FAILED). Used to clear the GraphQL response cache
+   * (spec §10, P3-04) — a callback rather than an import from
+   * services/ into graphql/ keeps that dependency one-directional.
+   */
+  onSyncFinished?: () => void;
 }
 
 export interface SyncJobInput {
@@ -64,7 +71,24 @@ export interface SyncResult {
  * assets — so a crash right after commit only risks losing the *publish*
  * step, which the relay/sweeper recover (failure mode D), never the write.
  */
+const TERMINAL_STATUSES: SyncStatus[] = ["SUCCESS", "TRUNCATED", "FAILED"];
+
+/**
+ * Thin wrapper around runSyncInner: fires `deps.onSyncFinished` exactly
+ * once, for every code path that reaches a terminal status, no matter
+ * which of runSyncInner's several return statements produced it — wrapping
+ * the whole function this way is far less error-prone than adding the
+ * call at each individual return site.
+ */
 export async function runSync(deps: SyncServiceDeps, job: SyncJobInput): Promise<SyncResult> {
+  const result = await runSyncInner(deps, job);
+  if (TERMINAL_STATUSES.includes(result.status)) {
+    deps.onSyncFinished?.();
+  }
+  return result;
+}
+
+async function runSyncInner(deps: SyncServiceDeps, job: SyncJobInput): Promise<SyncResult> {
   const { db, meta, clock, metrics, syncMaxItems, syncSkewMinutes } = deps;
   const skewMs = syncSkewMinutes * 60 * 1000;
 

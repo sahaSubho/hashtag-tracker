@@ -23,6 +23,7 @@ import { SyncWorker } from "./workers/sync-worker.js";
 import { DownloadWorker } from "./workers/download-worker.js";
 import { InMemoryRateLimitStore } from "./adapters/rate-limit/in-memory-rate-limit-store.js";
 import { LogAlertSink } from "./adapters/alerts/log-alert-sink.js";
+import { ResponseCache } from "./graphql/response-cache.js";
 
 const META_FIELDS =
   "id,media_type,timestamp,permalink,media_url,caption,like_count,comments_count,children{media_type,media_url}";
@@ -60,8 +61,14 @@ async function main(): Promise<void> {
   // but does NOT enforce read-only at the database level in that case — the
   // GraphQL server (P3-03/04) is responsible for only ever running reads.
   const readDb = makeReadDb(config.databaseUrlReadonly ?? config.databaseUrl);
-
   const clock = new SystemClock();
+
+  // Shared across the sync-worker (which clears/charges them) and the api
+  // role's GraphQL server (which reads/checks them), in case both roles
+  // run in this same process (the default APP_ROLES includes both).
+  const graphqlResponseCache = new ResponseCache();
+  const graphqlRateLimitStore = new InMemoryRateLimitStore(clock);
+
   const metrics = new PromMetrics();
   const metricsServer = createMetricsServer(metrics);
   metricsServer.listen(config.metricsPort, () => {
@@ -173,6 +180,7 @@ async function main(): Promise<void> {
         clock,
         syncMaxItems: config.syncMaxItems,
         syncSkewMinutes: config.syncSkewMinutes,
+        onSyncFinished: () => graphqlResponseCache.clear(),
       },
     });
     workers.push(worker);
@@ -226,6 +234,10 @@ async function main(): Promise<void> {
       clock,
       enableInternalRoutes: true,
       readDb,
+      graphqlNodeEnv: config.nodeEnv,
+      graphqlRateLimitStore: graphqlRateLimitStore,
+      graphqlCostPerMin: config.graphqlCostPerMin,
+      graphqlResponseCache,
     });
     httpServer = app.listen(config.port, () => {
       logger.info({ port: config.port }, "api listening");

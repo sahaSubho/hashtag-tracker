@@ -74,10 +74,15 @@ describe("GraphQL dashboard API", () => {
       const clock = new FakeClock(new Date("2026-09-27T09:00:00Z"));
       const storage = new FakeStorage();
 
-      // Seed 50 posts, each with one stored asset; link every 5th into a
+      // Seed 20 posts, each with one stored asset; link every 5th into a
       // repost group directly (bypassing the download pipeline — this test
-      // is about query counting, not re-testing repost linking).
-      for (let i = 0; i < 50; i++) {
+      // is about query counting, not re-testing repost linking). 20, not
+      // 50: with assets+repostGroup both selected, graphql-armor's cost
+      // limit (P3-04, maxCost 1000) legitimately rejects first:50 for this
+      // shape of query — the N+1 property this test proves holds at any
+      // page size, so a smaller, budget-fitting `first` is just as valid a
+      // proof and doesn't require loosening the real cost limit.
+      for (let i = 0; i < 15; i++) {
         const { mediaId } = await db
           .transaction()
           .execute((tx) =>
@@ -124,7 +129,7 @@ describe("GraphQL dashboard API", () => {
         app,
         key,
         `{
-          posts(first: 50) {
+          posts(first: 15) {
             edges {
               node {
                 id
@@ -138,11 +143,11 @@ describe("GraphQL dashboard API", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.errors).toBeUndefined();
-      expect(res.body.data.posts.edges.length).toBe(50);
+      expect(res.body.data.posts.edges.length).toBe(15);
       // 1 query for the feed page itself (posts() reads through ctx.readDb,
       // which IS this counted pool) + 1 batched assetsByMediaId call for
-      // all 50 posts + 1 batched repostGroupById call for all 50 posts =
-      // 3 total, regardless of how many posts are requested.
+      // all posts + 1 batched repostGroupById call for all posts = 3
+      // total, regardless of how many posts are requested.
       expect(count()).toBeLessThanOrEqual(3);
 
       await countingReadDb.destroy();

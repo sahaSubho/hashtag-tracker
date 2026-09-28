@@ -27,12 +27,13 @@ export class InMemoryRateLimitStore implements RateLimitStore {
 
     const cap = opts.limit + opts.burst;
     const windowEnd = bucket.windowStart + opts.windowMs;
+    const cost = opts.cost ?? 1;
 
-    if (bucket.count >= cap) {
-      return { allowed: false, remaining: 0, retryAfterMs: Math.max(0, windowEnd - now) };
+    if (bucket.count + cost > cap) {
+      return { allowed: false, remaining: Math.max(0, cap - bucket.count), retryAfterMs: Math.max(0, windowEnd - now) };
     }
 
-    bucket.count++;
+    bucket.count += cost;
     return {
       allowed: true,
       remaining: Math.max(0, cap - bucket.count),

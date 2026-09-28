@@ -13,6 +13,8 @@ import { healthRouter } from "./routes/health.js";
 import { internalStatusRouter } from "./routes/internal-status.js";
 import { graphqlRouter } from "./routes/graphql.js";
 import { rateLimitMiddleware, type RateLimitConfig } from "./rate-limit-middleware.js";
+import type { RateLimitStore } from "../ports/rate-limit-store.js";
+import type { ResponseCache } from "../graphql/response-cache.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -41,6 +43,13 @@ export interface AppDeps {
   enableInternalRoutes?: boolean;
   /** Kysely instance for GraphQL reads (spec §10) — the separate P3-02 pool, distinct from `db`. Omitted disables /graphql entirely. */
   readDb?: Kysely<DB>;
+  /** production enables the GraphQL persisted-operation allowlist, disables introspection, and masks resolver errors (spec §10). Default "development". */
+  graphqlNodeEnv?: string;
+  /** Backs the GraphQL per-API-key cost budget (spec §10). Omitted disables that check. */
+  graphqlRateLimitStore?: RateLimitStore;
+  graphqlCostPerMin?: number;
+  /** Owned by the caller so it can be cleared when a sync run finishes. Created internally if omitted. */
+  graphqlResponseCache?: ResponseCache;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -86,6 +95,10 @@ export function createApp(deps: AppDeps): Express {
         storage: deps.storage,
         cursorKeys: deps.cursorKeys,
         clock: deps.clock ?? new SystemClock(),
+        nodeEnv: deps.graphqlNodeEnv,
+        rateLimitStore: deps.graphqlRateLimitStore,
+        costPerMin: deps.graphqlCostPerMin,
+        responseCache: deps.graphqlResponseCache,
       })
     );
   }
