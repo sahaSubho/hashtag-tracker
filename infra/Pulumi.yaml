@@ -1,0 +1,7 @@
+name: hashtag-tracker
+runtime: nodejs
+description: >-
+  Production AWS infrastructure for the hashtag tracker (spec §15): VPC,
+  ECS Fargate services, RDS Postgres, S3, SQS, EventBridge Scheduler,
+  Secrets Manager, ALB + WAF. Never applied against a real account from
+  this repo — see instructions.md's `production` section.

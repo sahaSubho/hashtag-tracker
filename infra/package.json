@@ -1,0 +1,24 @@
+{
+  "name": "hashtag-tracker-infra",
+  "version": "0.1.0",
+  "description": "Pulumi IaC for the hashtag tracker production stack (spec §15)",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "preview": "pulumi preview",
+    "up": "pulumi up"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@pulumi/aws": "^7.48.0",
+    "@pulumi/pulumi": "^3.265.0"
+  },
+  "devDependencies": {
+    "@pulumi/policy": "^1.21.0",
+    "@types/node": "^26.6.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

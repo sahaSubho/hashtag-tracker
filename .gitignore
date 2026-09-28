@@ -4,3 +4,10 @@ dist/
 /storage/
 *.log
 coverage/
+
+# Pulumi (infra/)
+infra/bin/
+infra/policy-pack/bin/
+Pulumi.*.yaml
+!infra/Pulumi.yaml
+.pulumi/

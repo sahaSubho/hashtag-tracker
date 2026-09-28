@@ -1,0 +1,18 @@
+{
+  "name": "hashtag-tracker-policy-pack",
+  "version": "0.1.0",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pulumi/policy": "^1.21.0",
+    "@pulumi/pulumi": "^3.265.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
