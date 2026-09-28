@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { Kysely } from "kysely";
 import { Migrator, type MigrationResultSet, type MigrationProvider } from "kysely/migration";
 import { makeDb } from "./pool.js";
+import { loadEnvFile } from "../config/load-env-file.js";
 import { migrations } from "./migrations/index.js";
 
 const staticMigrationProvider: MigrationProvider = {
@@ -27,6 +28,7 @@ export async function runMigrations(db: Kysely<unknown>): Promise<MigrationResul
 }
 
 async function main(): Promise<void> {
+  loadEnvFile();
   const direction = process.argv[2];
   const connectionString =
     process.env.DATABASE_URL_MIGRATOR ?? process.env.DATABASE_URL;

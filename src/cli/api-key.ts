@@ -1,4 +1,5 @@
 import { makeDb } from "../db/pool.js";
+import { loadEnvFile } from "../config/load-env-file.js";
 import { createApiKeyCli, revokeApiKeyCli } from "./api-key-cli.js";
 
 /**
@@ -7,6 +8,7 @@ import { createApiKeyCli, revokeApiKeyCli } from "./api-key-cli.js";
  *   npm run apikey:revoke -- --key-id <keyId>
  */
 async function main(): Promise<void> {
+  loadEnvFile();
   const [command, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
 

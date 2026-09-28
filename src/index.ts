@@ -1,5 +1,6 @@
 import http from "node:http";
 import { loadConfig } from "./config/env.js";
+import { loadEnvFile } from "./config/load-env-file.js";
 import { createLogger } from "./http/logger.js";
 import { makeDb, makeReadDb } from "./db/pool.js";
 import { runMigrations } from "./db/migrate.js";
@@ -49,6 +50,7 @@ const SYNC_OVERDUE_GRACE_MS = 15 * 60 * 1000;
 const OUTBOX_STALL_MS = 10 * 60 * 1000;
 
 async function main(): Promise<void> {
+  loadEnvFile();
   const config = loadConfig(process.env);
   const logger = createLogger();
   logger.info({ appRoles: config.appRoles, nodeEnv: config.nodeEnv }, "starting hashtag-tracker");
