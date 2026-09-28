@@ -45,7 +45,10 @@ function requireAdminApiKey(db: Kysely<DB>, clock: Clock): RequestHandler {
  */
 export function internalStatusRouter(deps: InternalStatusRouteDeps): Router {
   const router = Router();
-  router.use(requireAdminApiKey(deps.db, deps.clock));
+  // Scoped to /internal: this router is mounted at the app root, so a
+  // pathless router.use() would gate every later route too (/graphql, the
+  // 404 handler) behind an admin key.
+  router.use("/internal", requireAdminApiKey(deps.db, deps.clock));
 
   router.get("/internal/status", async (_req, res) => {
     const lastRuns = await deps.db
