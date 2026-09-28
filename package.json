@@ -20,6 +20,13 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1141.0",
+    "@aws-sdk/client-s3": "^3.1141.0",
+    "@aws-sdk/client-secrets-manager": "^3.1141.0",
+    "@aws-sdk/client-sns": "^3.1141.0",
+    "@aws-sdk/client-sqs": "^3.1141.0",
+    "@aws-sdk/lib-storage": "^3.1141.0",
+    "@aws-sdk/s3-request-presigner": "^3.1141.0",
     "@escape.tech/graphql-armor": "^3.2.0",
     "@graphql-tools/utils": "^11.2.2",
     "dataloader": "^2.2.3",
@@ -36,6 +43,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@testcontainers/localstack": "^12.1.0",
     "@testcontainers/postgresql": "^12.1.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.3",

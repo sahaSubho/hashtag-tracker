@@ -24,6 +24,16 @@ import { DownloadWorker } from "./workers/download-worker.js";
 import { InMemoryRateLimitStore } from "./adapters/rate-limit/in-memory-rate-limit-store.js";
 import { LogAlertSink } from "./adapters/alerts/log-alert-sink.js";
 import { ResponseCache } from "./graphql/response-cache.js";
+import { SqsQueue } from "./adapters/aws/sqs-queue.js";
+import { S3Storage } from "./adapters/aws/s3-storage.js";
+import { SecretsManagerProvider } from "./adapters/aws/secrets-manager-provider.js";
+import { SnsAlertSink } from "./adapters/aws/sns-alert-sink.js";
+import { EventBridgeScheduler } from "./adapters/aws/eventbridge-scheduler.js";
+import type { Queue } from "./ports/queue.js";
+import type { BlobStorage } from "./ports/blob-storage.js";
+import type { SecretProvider } from "./ports/secret-provider.js";
+import type { AlertSink } from "./ports/alert-sink.js";
+import type { Scheduler } from "./ports/scheduler.js";
 
 const META_FIELDS =
   "id,media_type,timestamp,permalink,media_url,caption,like_count,comments_count,children{media_type,media_url}";
@@ -43,7 +53,18 @@ async function main(): Promise<void> {
   const logger = createLogger();
   logger.info({ appRoles: config.appRoles, nodeEnv: config.nodeEnv }, "starting hashtag-tracker");
 
-  const secrets = new EnvSecretProvider();
+  const clock = new SystemClock();
+
+  // Local vs AWS behind the exact same interfaces (spec brief, "Queue,
+  // Cron, And Storage": "structured so local implementations can later be
+  // replaced with AWS implementations"). config.secretsSource is reused as
+  // the single switch for all of them, since a real deployment flips every
+  // backend at once — the assignment's own submission always runs local.
+  const usingAws = config.secretsSource === "aws";
+
+  const secrets: SecretProvider = usingAws
+    ? new SecretsManagerProvider({ client: { region: config.awsRegion }, clock })
+    : new EnvSecretProvider();
   const metaAccessToken = await secrets.get("META_ACCESS_TOKEN");
   if (!metaAccessToken) {
     throw new Error("META_ACCESS_TOKEN is required");
@@ -61,7 +82,6 @@ async function main(): Promise<void> {
   // but does NOT enforce read-only at the database level in that case — the
   // GraphQL server (P3-03/04) is responsible for only ever running reads.
   const readDb = makeReadDb(config.databaseUrlReadonly ?? config.databaseUrl);
-  const clock = new SystemClock();
 
   // Shared across the sync-worker (which clears/charges them) and the api
   // role's GraphQL server (which reads/checks them), in case both roles
@@ -74,8 +94,18 @@ async function main(): Promise<void> {
   metricsServer.listen(config.metricsPort, () => {
     logger.info({ port: config.metricsPort }, "metrics listening");
   });
-  const queue = new InMemoryQueue(clock);
-  const storage = new DiskStorage(config.storageDir);
+  const queue: Queue = usingAws
+    ? new SqsQueue({
+        client: { region: config.awsRegion },
+        queueUrl: requireAwsConfig(config.awsSqsQueueUrl, "AWS_SQS_QUEUE_URL"),
+      })
+    : new InMemoryQueue(clock);
+  const storage: BlobStorage = usingAws
+    ? new S3Storage({
+        client: { region: config.awsRegion },
+        bucket: requireAwsConfig(config.awsS3Bucket, "AWS_S3_BUCKET"),
+      })
+    : new DiskStorage(config.storageDir);
   const dns = new SystemDns();
   const httpDownloader = new NodeFetchDownloader();
   const meta = new HttpMetaClient({
@@ -99,7 +129,7 @@ async function main(): Promise<void> {
   const intervals: ReturnType<typeof setInterval>[] = [];
   const workers: { handleSigterm(): void }[] = [];
   let httpServer: http.Server | undefined;
-  let scheduler: NodeCronScheduler | undefined;
+  let scheduler: Scheduler | undefined;
 
   if (config.appRoles.includes("relay")) {
     await bootstrap({
@@ -130,10 +160,15 @@ async function main(): Promise<void> {
       }, SWEEPER_INTERVAL_MS)
     );
 
-    const alertSink = new LogAlertSink({
-      logger,
-      slackWebhookUrl: (await secrets.get("SLACK_WEBHOOK_URL")) || undefined,
-    });
+    const alertSink: AlertSink = usingAws
+      ? new SnsAlertSink({
+          client: { region: config.awsRegion },
+          topicArn: requireAwsConfig(config.awsSnsAlertTopicArn, "AWS_SNS_ALERT_TOPIC_ARN"),
+        })
+      : new LogAlertSink({
+          logger,
+          slackWebhookUrl: (await secrets.get("SLACK_WEBHOOK_URL")) || undefined,
+        });
     intervals.push(
       setInterval(() => {
         void runWatchdogOnce({
@@ -161,12 +196,21 @@ async function main(): Promise<void> {
   }
 
   if (config.appRoles.includes("scheduler")) {
-    scheduler = new NodeCronScheduler({
-      db,
-      clock,
-      hashtag: config.hashtag,
-      cronExpression: config.syncIntervalCron,
-    });
+    // In a real AWS deployment the "scheduler" role should not be enabled
+    // at all — EventBridge Scheduler (created by the Pulumi stack, not by
+    // this process) replaces it entirely. EventBridgeScheduler exists so
+    // this branch still constructs something rather than silently running
+    // NodeCronScheduler's local cron against production, and its start()
+    // logs a loud warning precisely because reaching it means the role
+    // wiring is misconfigured for this deployment.
+    scheduler = usingAws
+      ? new EventBridgeScheduler({ logger })
+      : new NodeCronScheduler({
+          db,
+          clock,
+          hashtag: config.hashtag,
+          cronExpression: config.syncIntervalCron,
+        });
     scheduler.start();
   }
 
@@ -265,6 +309,14 @@ async function main(): Promise<void> {
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
+}
+
+/** Fails fast with a clear message when an AWS backend is selected but its resource identifier wasn't configured. */
+function requireAwsConfig(value: string | undefined, envVar: string): string {
+  if (!value) {
+    throw new Error(`${envVar} is required when SECRETS_SOURCE=aws (usingAws backends)`);
+  }
+  return value;
 }
 
 /** A rough ms estimate of the configured cron interval, for the bootstrap catch-up check. */

@@ -29,6 +29,16 @@ const rawSchema = z.object({
   DATABASE_URL_MIGRATOR: z.string().optional(),
 
   SECRETS_SOURCE: z.enum(["env", "aws"]).default("env"),
+  // AWS resource identifiers, used only when SECRETS_SOURCE=aws (spec §15).
+  // Left optional and unvalidated against SECRETS_SOURCE here — the actual
+  // assignment submission always runs local-only, so these exist to prove
+  // the local/AWS adapters are genuinely swappable behind one interface
+  // (spec brief, "Queue, Cron, And Storage"), not to be a fully generalized
+  // multi-backend config surface.
+  AWS_SQS_QUEUE_URL: z.string().optional(),
+  AWS_S3_BUCKET: z.string().optional(),
+  AWS_SNS_ALERT_TOPIC_ARN: z.string().optional(),
+  AWS_REGION: z.string().default("us-east-1"),
 
   HASHTAG: z.string().default("matcha"),
   META_API_VERSION: z.string().default("v24.0"),
@@ -71,6 +81,10 @@ export type AppConfig = {
   databaseUrlReadonly?: string;
   databaseUrlMigrator?: string;
   secretsSource: "env" | "aws";
+  awsSqsQueueUrl?: string;
+  awsS3Bucket?: string;
+  awsSnsAlertTopicArn?: string;
+  awsRegion: string;
   hashtag: string;
   metaApiVersion: string;
   metaIgUserId: string;
@@ -111,6 +125,10 @@ export function loadConfig(source: Record<string, string | undefined>): AppConfi
     databaseUrlReadonly: parsed.DATABASE_URL_READONLY,
     databaseUrlMigrator: parsed.DATABASE_URL_MIGRATOR,
     secretsSource: parsed.SECRETS_SOURCE,
+    awsSqsQueueUrl: parsed.AWS_SQS_QUEUE_URL,
+    awsS3Bucket: parsed.AWS_S3_BUCKET,
+    awsSnsAlertTopicArn: parsed.AWS_SNS_ALERT_TOPIC_ARN,
+    awsRegion: parsed.AWS_REGION,
     hashtag: parsed.HASHTAG,
     metaApiVersion: parsed.META_API_VERSION,
     metaIgUserId: parsed.META_IG_USER_ID,
