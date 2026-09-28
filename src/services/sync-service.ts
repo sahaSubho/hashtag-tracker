@@ -48,6 +48,12 @@ export interface SyncJobInput {
   hashtagId: number;
   edge: "top" | "recent";
   parentRunId?: string;
+  /**
+   * Set on a retry after a rate-limit/temporary pause: the paused run to
+   * continue (same row, counters, cap count and watermark). parentRunId is
+   * only ever the TRUNCATED run a follow-up continues from (spec §7-A).
+   */
+  resumeRunId?: string;
   cursor?: string | null;
   /** How many temporary-error retries have already happened for this logical sync chain. */
   temporaryAttempt?: number;
@@ -92,20 +98,28 @@ async function runSyncInner(deps: SyncServiceDeps, job: SyncJobInput): Promise<S
   const { db, meta, clock, metrics, syncMaxItems, syncSkewMinutes } = deps;
   const skewMs = syncSkewMinutes * 60 * 1000;
 
-  const watermark = job.parentRunId
-    ? await parentWatermark(db, job.parentRunId)
-    : await syncRunRepo.latestWatermark(db, job.hashtagId, job.edge);
+  const resumed = job.resumeRunId ? await syncRunRepo.findById(db, job.resumeRunId) : undefined;
+  if (resumed && resumed.status !== "RUNNING") {
+    // At-least-once delivery: this retry already ran to completion.
+    return { status: resumed.status, runId: resumed.id };
+  }
 
-  const run = await db
-    .transaction()
-    .execute((tx) =>
+  const watermark = resumed
+    ? resumed.watermark_before
+    : job.parentRunId
+      ? await parentWatermark(db, job.parentRunId)
+      : await syncRunRepo.latestWatermark(db, job.hashtagId, job.edge);
+
+  const run =
+    resumed ??
+    (await db.transaction().execute((tx) =>
       syncRunRepo.create(tx, {
         hashtagId: job.hashtagId,
         edge: job.edge,
         watermarkBefore: watermark,
         parentRunId: job.parentRunId,
       })
-    );
+    ));
 
   const hashtag = await db
     .selectFrom("hashtags")
@@ -114,10 +128,10 @@ async function runSyncInner(deps: SyncServiceDeps, job: SyncJobInput): Promise<S
     .executeTakeFirstOrThrow();
 
   let cursor: string | null = job.cursor ?? null;
-  let itemsSoFar = 0;
+  let itemsSoFar = resumed?.items_fetched ?? 0;
   let pages = 0;
-  let newestSeen: Date | null = null;
-  let oldestSeen: Date | null = null;
+  let newestSeen: Date | null = resumed?.newest_seen_ts ?? null;
+  let oldestSeen: Date | null = resumed?.oldest_seen_ts ?? null;
   let finalStatus: SyncStatus = "SUCCESS";
   let resumeCursor: string | null = null;
 
@@ -126,7 +140,7 @@ async function runSyncInner(deps: SyncServiceDeps, job: SyncJobInput): Promise<S
     try {
       page = await meta.media(job.edge, hashtag.ig_hashtag_id, cursor);
     } catch (err) {
-      return handleMetaError(deps, job, run.id, cursor, err);
+      return handleMetaError(deps, job, run.id, cursor, err, { newestSeen, oldestSeen });
     }
     pages++;
 
@@ -242,6 +256,9 @@ async function runSyncInner(deps: SyncServiceDeps, job: SyncJobInput): Promise<S
       oldestSeenTs: oldestSeen,
       resumeCursor,
       gapStatus: finalStatus === "TRUNCATED" ? "open" : "none",
+      // Clear any error recorded by an earlier pause of this same run.
+      errorCode: null,
+      errorMessage: null,
     });
 
     if (finalStatus === "TRUNCATED") {
@@ -272,6 +289,12 @@ async function runSyncInner(deps: SyncServiceDeps, job: SyncJobInput): Promise<S
   return { status: finalStatus, runId: run.id };
 }
 
+/** What a paused run has seen so far, saved so its resumed run keeps an accurate watermark. */
+interface PauseProgress {
+  newestSeen: Date | null;
+  oldestSeen: Date | null;
+}
+
 async function parentWatermark(db: Kysely<DB>, parentRunId: string): Promise<Date | null> {
   const parent = await syncRunRepo.findById(db, parentRunId);
   return parent?.watermark_before ?? null;
@@ -284,9 +307,8 @@ async function parentWatermark(db: Kysely<DB>, parentRunId: string): Promise<Dat
  *   retry — the account needs manual intervention (a new token).
  * - rate_limit: save the resume cursor and re-enqueue through the outbox
  *   with a delay, so the retry resumes from where it left off rather than
- *   re-reading pages already fetched. The run stays RUNNING; a later
- *   attempt (a fresh runSync call with the same runId as parent) finishes
- *   it.
+ *   re-reading pages already fetched. The run stays RUNNING; the retry
+ *   job carries resumeRunId and continues and finishes this same row.
  * - temporary (5xx, network, or unrecognized codes): same resume-cursor
  *   re-enqueue, but with exponential backoff and a capped attempt count —
  *   once exhausted, the run is marked FAILED.
@@ -300,13 +322,14 @@ async function handleMetaError(
   job: SyncJobInput,
   runId: string,
   cursor: string | null,
-  err: unknown
+  err: unknown,
+  progress: PauseProgress
 ): Promise<SyncResult> {
   const { db, clock, metrics } = deps;
 
   if (!(err instanceof MetaApiError)) {
     // An unexpected (non-Meta-API) error — treat as temporary/unknown.
-    return handleMetaError(deps, job, runId, cursor, new MetaApiError(-1, String(err)));
+    return handleMetaError(deps, job, runId, cursor, new MetaApiError(-1, String(err)), progress);
   }
 
   if (err.category === "fatal") {
@@ -323,7 +346,7 @@ async function handleMetaError(
 
   if (err.category === "rate_limit") {
     metrics.inc("meta.rate_limited");
-    await requeue(db, job, runId, cursor, clock, BACKOFF_BASE_MS, String(err.code), err.message);
+    await requeue(db, job, runId, cursor, clock, BACKOFF_BASE_MS, String(err.code), err.message, progress);
     return { status: "RUNNING", runId };
   }
 
@@ -343,7 +366,7 @@ async function handleMetaError(
   }
 
   const delayMs = computeBackoffMs(attempt, BACKOFF_BASE_MS, BACKOFF_MAX_MS);
-  await requeue(db, job, runId, cursor, clock, delayMs, String(err.code), err.message, attempt);
+  await requeue(db, job, runId, cursor, clock, delayMs, String(err.code), err.message, progress, attempt);
   return { status: "RUNNING", runId };
 }
 
@@ -356,19 +379,28 @@ async function requeue(
   delayMs: number,
   errorCode: string,
   errorMessage: string,
+  progress: PauseProgress,
   temporaryAttempt?: number
 ): Promise<void> {
   await db.transaction().execute(async (tx) => {
-    await syncRunRepo.recordPause(tx, runId, { resumeCursor: cursor, errorCode, errorMessage });
+    await syncRunRepo.recordPause(tx, runId, {
+      resumeCursor: cursor,
+      errorCode,
+      errorMessage,
+      newestSeenTs: progress.newestSeen,
+      oldestSeenTs: progress.oldestSeen,
+    });
     await outboxRepo.enqueue(
       tx,
       "SYNC_HASHTAG_MEDIA",
       {
         hashtagId: job.hashtagId,
         edge: job.edge,
-        parentRunId: job.parentRunId ?? runId,
+        parentRunId: job.parentRunId,
+        resumeRunId: runId,
         cursor,
         temporaryAttempt,
+        truncationChainLength: job.truncationChainLength,
       },
       new Date(clock.now().getTime() + delayMs)
     );

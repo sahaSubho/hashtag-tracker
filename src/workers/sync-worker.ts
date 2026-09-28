@@ -12,6 +12,7 @@ interface SyncJobPayload {
   hashtagId: number;
   edge: "top" | "recent";
   parentRunId?: string;
+  resumeRunId?: string;
   cursor?: string | null;
   temporaryAttempt?: number;
   truncationChainLength?: number;
@@ -51,6 +52,7 @@ export class SyncWorker {
           hashtagId: payload.hashtagId,
           edge: payload.edge,
           parentRunId: payload.parentRunId,
+          resumeRunId: payload.resumeRunId,
           cursor: payload.cursor,
           temporaryAttempt: payload.temporaryAttempt,
           truncationChainLength: payload.truncationChainLength,

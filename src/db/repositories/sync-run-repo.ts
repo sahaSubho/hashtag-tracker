@@ -14,8 +14,9 @@ export interface FinishSyncRunInput {
   oldestSeenTs?: Date | null;
   resumeCursor?: string | null;
   gapStatus?: GapStatus;
-  errorCode?: string;
-  errorMessage?: string;
+  /** null clears an error left by an earlier pause; undefined leaves it untouched. */
+  errorCode?: string | null;
+  errorMessage?: string | null;
 }
 
 export const syncRunRepo = {
@@ -80,7 +81,13 @@ export const syncRunRepo = {
   async recordPause(
     tx: Transaction<DB>,
     runId: string,
-    input: { resumeCursor: string | null; errorCode: string; errorMessage: string }
+    input: {
+      resumeCursor: string | null;
+      errorCode: string;
+      errorMessage: string;
+      newestSeenTs?: Date | null;
+      oldestSeenTs?: Date | null;
+    }
   ) {
     await tx
       .updateTable("sync_runs")
@@ -88,6 +95,8 @@ export const syncRunRepo = {
         resume_cursor: input.resumeCursor,
         error_code: input.errorCode,
         error_message: input.errorMessage,
+        newest_seen_ts: input.newestSeenTs,
+        oldest_seen_ts: input.oldestSeenTs,
       })
       .where("id", "=", runId)
       .execute();
