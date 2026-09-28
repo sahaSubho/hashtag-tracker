@@ -25,6 +25,8 @@ export class DownloadWorker {
   constructor(private readonly deps: DownloadWorkerDeps) {}
 
   async runOnce(): Promise<number> {
+    // See SyncWorker.runOnce for why this is checked here, not per-job.
+    if (!this.running) return 0;
     const jobs = await this.deps.queue.receive(["DOWNLOAD_ASSET"], this.deps.concurrency);
     await Promise.all(jobs.map((job) => this.handle(job)));
     return jobs.length;

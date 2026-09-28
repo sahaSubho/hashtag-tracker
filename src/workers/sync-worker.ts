@@ -29,6 +29,12 @@ export class SyncWorker {
   constructor(private readonly deps: SyncWorkerDeps) {}
 
   async runOnce(): Promise<number> {
+    // Checked at the very start, not inside the loop: once a job has been
+    // received it is claimed/in flight, and stopping partway through would
+    // abandon it mid-processing for no benefit — the sweeper already
+    // recovers a job whose worker dies outright, so there's nothing this
+    // check needs to protect against beyond not picking up NEW work.
+    if (!this.running) return 0;
     const jobs = await this.deps.queue.receive(["SYNC_HASHTAG_MEDIA"], 1);
     for (const job of jobs) {
       await this.handle(job);
