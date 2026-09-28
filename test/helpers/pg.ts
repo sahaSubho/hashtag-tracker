@@ -15,6 +15,14 @@ function getContainer(): Promise<StartedPostgreSqlContainer> {
     .withDatabase("hashtag_tracker_test")
     .withUsername("postgres")
     .withPassword("postgres")
+    // Default max_connections (100) turned out to be tight once
+    // isolate: false (vitest.config.ts) made every test file in the
+    // suite share this one container's connection budget instead of
+    // each file getting its own container — occasional 60s timeouts
+    // (not wrong results, just starvation) showed up on ordinary
+    // single-connection tests under full-suite load. Raised well above
+    // what this suite plausibly needs concurrently.
+    .withCommand(["postgres", "-c", "max_connections=300"])
     .start();
   return containerPromise;
 }
