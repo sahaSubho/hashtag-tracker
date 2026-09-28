@@ -13,6 +13,7 @@ import * as m0011 from "./0011_dead_letters.js";
 import * as m0012 from "./0012_alerts.js";
 import * as m0013 from "./0013_api_keys.js";
 import * as m0014 from "./0014_heartbeats.js";
+import * as m0015 from "./0015_role_grant_fixes.js";
 
 /**
  * Explicit migration registry, in place of Kysely's FileMigrationProvider.
@@ -41,4 +42,5 @@ export const migrations: Record<string, Migration> = {
   "0012_alerts": m0012,
   "0013_api_keys": m0013,
   "0014_heartbeats": m0014,
+  "0015_role_grant_fixes": m0015,
 };

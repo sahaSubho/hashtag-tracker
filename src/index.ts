@@ -3,7 +3,6 @@ import { loadConfig } from "./config/env.js";
 import { loadEnvFile } from "./config/load-env-file.js";
 import { createLogger } from "./http/logger.js";
 import { makeDb, makeReadDb } from "./db/pool.js";
-import { runMigrations } from "./db/migrate.js";
 import { createApp } from "./http/app.js";
 import { SystemClock } from "./adapters/clock/system-clock.js";
 import { InMemoryQueue } from "./adapters/queue/in-memory-queue.js";
@@ -71,8 +70,12 @@ async function main(): Promise<void> {
   }
   const metaAppSecret = await secrets.get("META_APP_SECRET");
 
+  // Migrations are NOT run here: they run only through `npm run migrate`
+  // as the migrator role (spec §5 roles, §6.1, §15 one-off ECS task).
+  // tracker_app deliberately has no schema privileges, so running them at
+  // startup either crashed on Kysely's bookkeeping tables or, with a
+  // pending migration, would have crash-looped every service.
   const db = makeDb(config.databaseUrl);
-  await runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 
   // A separate, small pool for GraphQL dashboard reads (spec §10, §15.1) so
   // a saturated dashboard workload can never starve ingestion for

@@ -12,6 +12,17 @@ export async function grantAppTable(db: Kysely<unknown>, tableName: string): Pro
   await sql`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${sql.ref(tableName)} TO tracker_app`.execute(
     db
   );
+  await grantAppSequences(db);
+}
+
+/**
+ * Lets tracker_app use the sequences behind serial/bigserial ids — table
+ * privileges alone don't cover them, so without this every INSERT into a
+ * serial-id table fails. Idempotent; grantAppTable calls it so future
+ * tables are covered automatically.
+ */
+export async function grantAppSequences(db: Kysely<unknown>): Promise<void> {
+  await sql`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO tracker_app`.execute(db);
 }
 
 /** Grants read-only access to a table to the tracker_graphql role. */

@@ -139,3 +139,19 @@ export async function withGraphqlRole<T>(
     return fn(tx as unknown as Kysely<DB>);
   });
 }
+
+/**
+ * Same as withGraphqlRole, for tracker_app — the role every service
+ * actually runs as. Most tests connect as the container superuser, which
+ * hides missing grants (it's how "permission denied for sequence" and the
+ * missing tracker_graphql table grants reached a live run untested).
+ */
+export async function withAppRole<T>(
+  db: Kysely<DB>,
+  fn: (roleDb: Kysely<DB>) => Promise<T>
+): Promise<T> {
+  return db.transaction().execute(async (tx) => {
+    await sql`SET LOCAL ROLE tracker_app`.execute(tx);
+    return fn(tx as unknown as Kysely<DB>);
+  });
+}
