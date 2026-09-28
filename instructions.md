@@ -193,4 +193,4 @@ One entry per alert key the watchdog (`src/services/watchdog.ts`) actually fires
   - Express 5's router requiring named wildcard parameters (`*splat` instead of bare `*`), which broke the `/files` route until a manual smoke test against a running server caught it.
 - I ran manual smoke tests at each phase boundary: brought up real Postgres (and later LocalStack) via Docker, ran migrations, started the app, hit the REST and GraphQL endpoints with real requests, and confirmed `SIGTERM` triggers a clean shutdown within the configured grace period.
 
-No chat export is included with this submission; the design and build process, including every bug found along the way, is summarized above and in the plan document's own inline notes.
+A written export of the session — the full design conversation and phase-by-phase build, anchored to the real commit history — is included at [`ai-usage/session-export.md`](ai-usage/session-export.md). No transcript-export tool was available in this environment, so it's a faithful reconstruction rather than a raw log; it contains no credentials or secrets.
