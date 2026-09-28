@@ -45,6 +45,31 @@ interface MetaErrorBody {
   error: { code: number; message?: string };
 }
 
+/**
+ * Fields requested on the top_media/recent_media edges. Deliberately no
+ * `children{...}`: against the live API, requesting carousel children makes
+ * top_media fail with code 1 ("Please reduce the amount of data you're
+ * asking for") at every page size tried, down to 5. Without it, a carousel
+ * is stored with its cover `media_url` only (the mapper's single-asset
+ * path); hashtag media belongs to other accounts, so the remaining carousel
+ * items can't be fetched per-post either.
+ */
+export const META_MEDIA_FIELDS =
+  "id,media_type,timestamp,permalink,media_url,caption,like_count,comments_count";
+
+/** Page sizes tried in order when Meta says a page is too large. */
+const PAGE_LIMITS = [25, 10, 5] as const;
+
+const TOO_MUCH_DATA_CODE = 1;
+
+function isTooMuchDataError(err: unknown): boolean {
+  return (
+    err instanceof MetaApiError &&
+    err.code === TOO_MUCH_DATA_CODE &&
+    /reduce the amount of data/i.test(err.message)
+  );
+}
+
 /** Error taxonomy from spec §8. */
 export type MetaErrorCategory = "rate_limit" | "temporary" | "fatal";
 
@@ -94,20 +119,37 @@ export class HttpMetaClient implements MetaClient {
 
   async media(edge: "top" | "recent", hashtagId: string, cursor: string | null): Promise<MetaPage> {
     const endpoint = edge === "top" ? "top_media" : "recent_media";
-    const params: Record<string, string> = {
-      user_id: this.opts.igUserId,
-      fields: this.opts.fields,
-      limit: "25",
-    };
-    if (cursor) params.after = cursor;
-
-    const body = await this.fetchJson<MetaMediaResponse>(`${hashtagId}/${endpoint}`, params);
+    const body = await this.fetchMediaPage(`${hashtagId}/${endpoint}`, cursor);
 
     return {
       items: body.data,
       nextCursor: body.paging?.cursors?.after ?? null,
       usagePct: this.throttle.currentUsagePct(),
     };
+  }
+
+  /**
+   * Fetches one page, stepping down through PAGE_LIMITS when Meta answers
+   * "reduce the amount of data" (code 1) — observed live on hashtag edges
+   * when a page holds many large items. Same cursor each time, so no items
+   * are skipped. Any other error, or failing at the smallest limit, is
+   * rethrown unchanged for the sync service's normal retry handling.
+   */
+  private async fetchMediaPage(path: string, cursor: string | null): Promise<MetaMediaResponse> {
+    for (let i = 0; ; i++) {
+      const params: Record<string, string> = {
+        user_id: this.opts.igUserId,
+        fields: this.opts.fields,
+        limit: String(PAGE_LIMITS[i]),
+      };
+      if (cursor) params.after = cursor;
+      try {
+        return await this.fetchJson<MetaMediaResponse>(path, params);
+      } catch (err) {
+        const canShrink = i < PAGE_LIMITS.length - 1;
+        if (!canShrink || !isTooMuchDataError(err)) throw err;
+      }
+    }
   }
 
   async debugToken(): Promise<MetaTokenHealth> {

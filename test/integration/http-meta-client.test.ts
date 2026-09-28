@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { HttpMetaClient } from "../../src/adapters/meta/http-meta-client.js";
+import { HttpMetaClient, META_MEDIA_FIELDS } from "../../src/adapters/meta/http-meta-client.js";
 import { metaClientContract } from "../contract/meta-client.contract.js";
 import type { HttpDownloader } from "../../src/ports/http-downloader.js";
 import { FakeClock } from "../helpers/fakes.js";
@@ -368,5 +368,66 @@ describe("HttpMetaClient", () => {
 
     const call = calls.find((c) => c.name === "meta.calls_total");
     expect(call?.labels).toMatchObject({ endpoint: "recent_media", code: "4" });
+  });
+
+  it("does not request carousel children on hashtag edges (Meta rejects it)", () => {
+    // Found against the live API (2026-09-28): with children{...} in the
+    // field list, top_media fails with code 1 "Please reduce the amount of
+    // data you're asking for" at every page size down to 5.
+    expect(META_MEDIA_FIELDS).not.toContain("children");
+    expect(META_MEDIA_FIELDS.split(",")).toEqual(
+      expect.arrayContaining(["id", "media_type", "timestamp", "permalink", "media_url"])
+    );
+  });
+
+  describe("page-size shrinking on Meta's 'reduce the amount of data' error", () => {
+    const TOO_MUCH = { error: { code: 1, message: "Please reduce the amount of data you're asking for, then retry your request" } };
+
+    /** Answers based on the request's `limit` query param. */
+    function limitAwareClient(respond: (limit: number) => unknown) {
+      const limits: number[] = [];
+      const http: HttpDownloader = {
+        async get(url: string) {
+          const limit = Number(new URL(url).searchParams.get("limit"));
+          limits.push(limit);
+          return jsonResponse(respond(limit))();
+        },
+      };
+      const client = new HttpMetaClient({
+        http,
+        accessToken: "test-token",
+        appSecret: undefined,
+        igUserId: "123",
+        apiVersion: "v24.0",
+        fields: META_MEDIA_FIELDS,
+      });
+      return { client, limits };
+    }
+
+    it("retries the same page with a smaller limit and returns its items", async () => {
+      const { client, limits } = limitAwareClient((limit) =>
+        limit > 10 ? TOO_MUCH : { data: [{ id: "m1" }], paging: { cursors: { after: "c2" } } }
+      );
+
+      const page = await client.media("top", "17843", "c1");
+
+      expect(limits).toEqual([25, 10]);
+      expect(page.items).toEqual([{ id: "m1" }]);
+      expect(page.nextCursor).toBe("c2");
+    });
+
+    it("gives up with the original temporary error once the smallest limit also fails", async () => {
+      const { client, limits } = limitAwareClient(() => TOO_MUCH);
+
+      await expect(client.media("top", "17843", null)).rejects.toMatchObject({ code: 1, category: "temporary" });
+      expect(limits).toEqual([25, 10, 5]);
+    });
+
+    it("does not shrink for other code-1 errors (e.g. a genuinely unknown error)", async () => {
+      const { client, limits } = limitAwareClient(() => ({ error: { code: 1, message: "An unknown error occurred" } }));
+
+      await expect(client.media("top", "17843", null)).rejects.toMatchObject({ code: 1 });
+      expect(limits).toEqual([25]);
+    });
   });
 });

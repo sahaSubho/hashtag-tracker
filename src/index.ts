@@ -13,7 +13,7 @@ import { NodeFetchDownloader } from "./adapters/downloader/node-fetch-downloader
 import { SystemDns } from "./adapters/dns/system-dns.js";
 import { PromMetrics } from "./adapters/metrics/prom-metrics.js";
 import { createMetricsServer } from "./http/metrics-server.js";
-import { HttpMetaClient } from "./adapters/meta/http-meta-client.js";
+import { HttpMetaClient, META_MEDIA_FIELDS } from "./adapters/meta/http-meta-client.js";
 import { NodeCronScheduler } from "./adapters/scheduler/node-cron-scheduler.js";
 import { bootstrap } from "./services/bootstrap.js";
 import { runRelayOnce } from "./services/relay.js";
@@ -36,8 +36,6 @@ import type { SecretProvider } from "./ports/secret-provider.js";
 import type { AlertSink } from "./ports/alert-sink.js";
 import type { Scheduler } from "./ports/scheduler.js";
 
-const META_FIELDS =
-  "id,media_type,timestamp,permalink,media_url,caption,like_count,comments_count,children{media_type,media_url}";
 
 const RELAY_INTERVAL_MS = 1000;
 const SWEEPER_INTERVAL_MS = 60000;
@@ -116,7 +114,7 @@ async function main(): Promise<void> {
     appSecret: metaAppSecret,
     igUserId: config.metaIgUserId,
     apiVersion: config.metaApiVersion,
-    fields: META_FIELDS,
+    fields: META_MEDIA_FIELDS,
     clock,
     metrics,
     refreshAccessToken: async () => {
